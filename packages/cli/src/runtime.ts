@@ -6,7 +6,14 @@
  * and threads the session id and the audit sink through. The proxy knows the
  * gates turn a request into a result; this is where they learn how.
  */
-import type { AuditFields, CompiledPolicy, GuardPolicy } from '@mcpguard/core';
+import type {
+  AuditFields,
+  CompiledPolicy,
+  GuardPolicy,
+  SecurityEvent,
+  SecurityEventKind,
+  TelemetrySink,
+} from '@mcpguard/core';
 import type { CompiledRuleset, ScanOptions } from '@mcpguard/detect';
 import {
   blockedResult,
@@ -30,6 +37,8 @@ export interface RuntimeDeps {
   readonly clock: () => number;
   /** Reports a security event to stderr diagnostics. */
   readonly onEvent: (event: string, detail: Record<string, unknown>) => void;
+  /** The OTLP sink, off by default. */
+  readonly telemetry: TelemetrySink;
 }
 
 /** A writer that turns fields plus raw content into a chained, appended record. */
@@ -66,6 +75,27 @@ export function scanOptionsFor(
 /** The gates the bridge is wired with. */
 export function buildGates(deps: RuntimeDeps): Gates {
   const enforce = deps.policy.mode === 'enforce';
+
+  const emit = (
+    kind: SecurityEventKind,
+    type: SecurityEvent['type'],
+    toolName: string | undefined,
+    action: string,
+    score: number | undefined,
+    evidence: readonly string[],
+  ): void => {
+    deps.telemetry.emit({
+      type,
+      kind,
+      at: deps.clock(),
+      sessionId: deps.sessionId,
+      serverName: deps.serverName,
+      toolName,
+      score,
+      action,
+      evidence,
+    });
+  };
 
   const contextFor = (toolName: string): GuardContext => ({
     policy: deps.compiledPolicy,
@@ -111,6 +141,9 @@ export function buildGates(deps: RuntimeDeps): Gates {
       const access = guardCall(contextFor(toolName), deps.serverName, toolName, deps.sessionId);
       if (access.action === 'deny' && enforce) {
         deps.onEvent('access_denied', { tool: toolName, rule: access.matchedRule });
+        emit('access_denied', 'policy_decision', toolName, 'deny', undefined, [
+          access.matchedRule ?? '',
+        ]);
         record('tool_call', toolName, 'deny', undefined, [access.matchedRule ?? ''], [], '', '');
         return blockedResult('deny', 0, deps.ruleset.rulesetVersion) as never;
       }
@@ -121,7 +154,10 @@ export function buildGates(deps: RuntimeDeps): Gates {
       const score = Math.max(0, ...guarded.verdicts.map((v) => v.score));
       if (guarded.action !== 'allow') {
         deps.onEvent('injection_detected', { tool: toolName, action: guarded.action, score });
+        emit('injection_detected', 'security_event', toolName, guarded.action, score, findings);
       }
+      if (piiKinds.length > 0)
+        emit('pii_masked', 'security_event', toolName, guarded.action, undefined, piiKinds);
       const maskedText = guarded.verdicts.map((v) => v.text).join('\n');
       const rawText = guarded.verdicts.map((v) => v.totalBytes).join(',');
       record('tool_call', toolName, guarded.action, score, findings, piiKinds, maskedText, rawText);

@@ -16,6 +16,7 @@ import { CliError, EXIT, messageOf } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
 import { loadShippedRuleset } from '../ruleset.js';
 import { buildGates } from '../runtime.js';
+import { NULL_TELEMETRY, OtlpTelemetrySink } from '../telemetry/sink.js';
 import { ulid } from '../ulid.js';
 import { parseWrapArgs } from './wrap-args.js';
 
@@ -62,6 +63,21 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
       })
     : undefined;
 
+  const telemetry =
+    loaded.policy.telemetry.enabled && loaded.policy.telemetry.endpoint !== undefined
+      ? new OtlpTelemetrySink({
+          service: loaded.policy.telemetry.service_name,
+          post: otlpPoster(
+            loaded.policy.telemetry.endpoint,
+            headersFrom(context.env, loaded.policy.telemetry.headers_env),
+          ),
+          onError: (error) =>
+            context.stderr.write(
+              `[mcpguard] ${JSON.stringify({ event: 'telemetry_error', message: error.message })}\n`,
+            ),
+        })
+      : NULL_TELEMETRY;
+
   const gates = buildGates({
     policy: loaded.policy,
     compiledPolicy: compiled,
@@ -71,6 +87,7 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
     sessionExact: true,
     audit,
     clock: () => Date.now(),
+    telemetry,
     onEvent: (event, detail) =>
       context.stderr.write(
         `[mcpguard] ${JSON.stringify({ event, session: sessionId, ...detail })}\n`,
@@ -113,4 +130,34 @@ function waitForClose(server: { onclose?: (() => void) | undefined }): Promise<v
       resolve();
     };
   });
+}
+
+/** A best-effort OTLP/HTTP JSON poster. A failed post is reported, never thrown. */
+function otlpPoster(
+  endpoint: string,
+  headers: Record<string, string>,
+): (payload: unknown) => Promise<void> {
+  return async (payload) => {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`collector responded ${response.status}`);
+  };
+}
+
+/** Parses `KEY=value,KEY2=value2` from the named environment variable. */
+function headersFrom(
+  env: Readonly<Record<string, string | undefined>>,
+  headersEnv: string | undefined,
+): Record<string, string> {
+  const raw = headersEnv !== undefined ? env[headersEnv] : undefined;
+  if (raw === undefined) return {};
+  const out: Record<string, string> = {};
+  for (const pair of raw.split(',')) {
+    const [key, ...rest] = pair.split('=');
+    if (key !== undefined && rest.length > 0) out[key.trim()] = rest.join('=').trim();
+  }
+  return out;
 }

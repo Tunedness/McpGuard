@@ -606,6 +606,39 @@ Yok. Ölçüm PRD §6'yı referans yükünde tuttu; büyük-öğe aşımı tasar
 
 ---
 
+## Faz 9 — telemetri (OTLP, `security_event`) (bitti)
+
+El yazması OTLP/HTTP, `@opentelemetry/*` yok (ADR-007, `discipline.test.ts`
+zorluyor), opt-in ve varsayılan kapalı. 595 test.
+
+```
+packages/cli/src/telemetry/otlp.ts   toLogRecord · toLogsPayload (el yazması)
+packages/cli/src/telemetry/sink.ts   OtlpTelemetrySink (batch, best-effort)
+```
+
+### Bilinmesi gerekenler
+
+- **`security_event` bu aracın olay tipi** (çatı ADR-003 ayırdı); `policy_decision`
+  de yayılır. `loop_detection`/`budget_event` AgentFuse'un — çekirdek `EventType`
+  tip sistemiyle yalnız ikisine izin veriyor.
+- **Varsayılan kapalı:** `telemetry.enabled` + `endpoint` olmadan `NULL_TELEMETRY`.
+  Güvenlik proxy'sinin varsayılan olarak eve telefon etmemesi, satın alma
+  incelemesinde açıklanacak bir madde olmaktan çıkar.
+- **Best-effort:** başarısız POST raporlanır, **asla** çağrıya fırlatılmaz —
+  telemetri bir çağrıyı bloklayamaz. Batch dolunca flush; başarısızlık düşer.
+- Namespace `tunedness.*`, timestamp nanosaniye, attribute kodlaması elle.
+
+### Çelişki kaydı
+
+Yok. ADR-007'ye birebir uydu.
+
+### Sonraki faza bırakılan dikişler
+
+- Checkpoint syslog sink'i hâlâ P1 (stderr çalışıyor).
+- Trace context (`traceparent`) yayımı P1.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme
