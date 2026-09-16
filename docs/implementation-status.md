@@ -487,6 +487,72 @@ Modern era serving'i Faz 8'de gerçek koşumla netleşecek.
 
 ---
 
+## Faz 8 — CLI ve `wrap` (bitti, proxy gerçek koşumla DOĞRULANDI)
+
+`mcpguard` bin'i, altı komut, ve Faz 7'nin bekleyen uçtan uca doğrulaması.
+583 test.
+
+```
+packages/cli/src/config.ts        yaml + LineCounter, dosya:satır hata
+packages/cli/src/ruleset.ts       @mcpguard/ruleset → loadRuleset
+packages/cli/src/runtime.ts       policy+ruleset → guard gates (AuditRecorder)
+packages/cli/src/audit-writer.ts  append-only JSONL, hash zinciri sahibi
+packages/cli/src/ulid.ts          oturum kimliği (çekirdek değil, CLI mint eder)
+packages/cli/src/commands/{wrap,scan,validate,init,audit,lock}.ts
+packages/cli/src/commands/wrap-process.test.ts   GERÇEK stdio boru
+packages/cli/src/testing/fixtures/echo-server.mjs
+examples/echo-server.mjs
+```
+
+### DOĞRULANDI — proxy gerçek MCP protokolüyle çalışıyor
+
+`wrap-process.test.ts` derlenmiş `dist/main.js`'i gerçek bir `StdioClientTransport`
+ile sürüyor: client → `mcpguard wrap` → echo fixture sunucu. Kanıtlanan:
+
+- `tools/list` proxy üzerinden geçiyor, `echo` görünüyor.
+- Temiz sonuç bayt-birebir geçiyor.
+- **PII maskeleniyor:** `kimlik 10000000146` → `kimlik [TCKN:***]`, ham değer
+  hiçbir yerde yok.
+- **Injection tespit ediliyor** (skor 64), audit'e yazılıyor ve
+  **`verifyChain` gerçek dosyada geçiyor**; elle kurcalayınca kırılıyor.
+
+Faz 7'nin "tesisat derleniyor ama gerçek sunucuyla koşturulmadı" çekincesi
+**kapandı**.
+
+### Bilinmesi gerekenler
+
+- **`main.ts` süreç dokunan tek dosya** — `discipline.test.ts` bunu ve
+  `@opentelemetry/*`'nin hiçbir manifest'te/kurulu olmadığını (`npm ls`)
+  zorluyor.
+- **Audit yazıcı hash zincirinin sahibi:** runtime yalnız `AuditFields` + ham
+  içerik verir, `AuditWriter.record` prevHash/seq'i tutup zincirler. Dizini
+  ilk yazımda `mkdirSync` ile açar (eksik `.mcpguard/` yüzünden proxy
+  başlamamazlık etmez).
+- **Oturum kimliği CLI'da ULID** ile üretilir (`node:crypto`); çekirdek
+  rastgelelik üretmez. stdio wrap'te bir child = bir oturum (ADR-006).
+- **`wrap` argümanları ilk `--`'de durur;** sonrası child'ın. `parseWrapArgs`.
+- Politika arama: `--policy` → `MCPGUARD_POLICY` → `cwd`'den yukarı; göreli
+  yollar politika dosyasına göre çözülür.
+
+### Çelişki kaydı
+
+**Testte `wrap` alt komutu argümanlardan düşmüştü** (`[MAIN, '--name'...]`,
+`'wrap'` yok) → "unknown command: --name" → "Connection closed". Manuel e2e'de
+vardı; testte eksikti. Eklendi. Gerçek bir hata değil, test kurulum hatası —
+ama tam da bu yüzden gerçek-süreç testi değerli: birim test bunu yakalamazdı.
+
+### Sonraki faza bırakılan dikişler
+
+- **`serve` (HTTP gateway) bilinçle reddediyor** — Faz 11 (ya da P1). `wrap`
+  bugün korumalı olan.
+- Manifest kapısı (`guardList` → `diffServer` → `guardlock.json` yaz/kontrol)
+  hâlâ sadece geçiriyor; TOFU akışı `wrap`'e bağlanacak — küçük kalan iş.
+- Telemetri (OTLP `security_event`) Faz 9; şu an olaylar stderr'e
+  `[mcpguard] {event...}` diye yazılıyor.
+- Checkpoint stderr'e yazılıyor; syslog sink'i P1.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme

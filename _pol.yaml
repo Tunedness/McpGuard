@@ -1,0 +1,9 @@
+version: 1
+mode: enforce
+scan:
+  default:
+    action: strip
+pii:
+  enabled: true
+audit:
+  enabled: false

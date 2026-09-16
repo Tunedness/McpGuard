@@ -7,6 +7,13 @@
  * them. The second is that per-command flag declarations turn an unknown flag
  * into a typo suggestion rather than a silent no-op.
  */
+
+import { runAudit } from './commands/audit.js';
+import { runInit } from './commands/init.js';
+import { runLock } from './commands/lock.js';
+import { runScan } from './commands/scan.js';
+import { runValidate } from './commands/validate.js';
+import { runWrap } from './commands/wrap.js';
 import { CliError, EXIT, formatCliError } from './errors.js';
 import { versionBanner } from './index.js';
 import { type CliContext, writeLines } from './io.js';
@@ -72,19 +79,26 @@ async function dispatch(context: CliContext): Promise<number> {
     });
   }
 
+  const rest = context.argv.slice(1);
   // No `default`: the switch is exhaustive over `Command`, so adding an entry
   // to `COMMANDS` fails the build until it is wired up here.
   switch (first) {
     case 'wrap':
+      return runWrap(context, rest);
     case 'serve':
-    case 'init':
-    case 'validate':
-    case 'lock':
-    case 'audit':
-    case 'scan':
-      throw new CliError(`\`${first}\` is not implemented yet`, {
+      throw new CliError('serve (the guarded HTTP gateway) is not built yet', {
         exitCode: EXIT.usage,
-        hints: ['This is the phase 1 skeleton; the commands arrive in phases 8 and 11.'],
+        hints: ['It arrives in phase 11; use `wrap` for a stdio server today.'],
       });
+    case 'init':
+      return runInit(context, rest);
+    case 'validate':
+      return runValidate(context, rest);
+    case 'scan':
+      return runScan(context, rest);
+    case 'audit':
+      return runAudit(context, rest);
+    case 'lock':
+      return runLock(context, rest);
   }
 }

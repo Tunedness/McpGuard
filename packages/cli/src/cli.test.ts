@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMMANDS, run, usage } from './cli.js';
+import { run, usage } from './cli.js';
 import { EXIT } from './errors.js';
 import { versionBanner } from './index.js';
 import { StringWriter } from './io.js';
@@ -53,12 +53,26 @@ describe('run', () => {
     expect(stderr.text).toContain('wrap');
   });
 
-  it.each(COMMANDS)('says plainly that %s is not built yet', async (command) => {
-    // Better than a silent success: a skeleton that pretends to guard something
-    // is worse than one that refuses to.
-    const { ctx, stderr } = context([command]);
+  it('refuses wrap with no server command, and says how to give one', async () => {
+    const { ctx, stderr } = context(['wrap']);
 
     await expect(run(ctx)).resolves.toBe(EXIT.usage);
-    expect(stderr.text).toContain('not implemented yet');
+    expect(stderr.text).toContain('server command');
+  });
+
+  it('says plainly that serve is not built yet', async () => {
+    // The one command that is honestly deferred: a skeleton that pretended to be
+    // a guarded gateway would be worse than one that says it is not.
+    const { ctx, stderr } = context(['serve']);
+
+    await expect(run(ctx)).resolves.toBe(EXIT.usage);
+    expect(stderr.text).toContain('not built yet');
+  });
+
+  it('runs a real command: validate reports the default posture', async () => {
+    const { ctx, stdout } = context(['validate']);
+
+    await expect(run(ctx)).resolves.toBe(EXIT.ok);
+    expect(stdout.text).toContain('policy is valid');
   });
 });
