@@ -390,6 +390,49 @@ Luhn bilinen geçerli değerlerle test edildi (10000000146, TR33..., 4111...).
 
 ---
 
+## Faz 6 — audit log ve manifest sabitleme, çekirdek tarafı (bitti)
+
+Saf hesaplama: kayıt üretimi, zincir doğrulaması, manifest normalizasyonu ve
+diff. Dosyaya yazma Faz 8 CLI'ın işi. 522 test.
+
+```
+packages/core/src/audit/record.ts   AuditRecord · buildRecord (hash zinciri)
+packages/core/src/audit/chain.ts     verifyChain · checkpoint
+packages/core/src/lock/manifest.ts   hashTool · lockServer · diffServer (TOFU)
+```
+
+### Bilinmesi gerekenler
+
+- **Kayıt ham içerik tutmaz:** maskeli içerik + `HMAC(auditKey, ham)` parmak
+  izi (ADR-004 düzeltmesi). Düz `sha256(ham)` düşük entropili içerikte kehanet
+  olurdu. Anahtar yoksa parmak izi yok — zayıf ama düz digest'ten iyi.
+- **Zincir ortadaki düzenlemeyi yakalar:** her kayıt bir öncekinin hash'ini
+  taşır; `verifyChain` üç şeyi kontrol eder — kaydın hash'i yeniden hesaplanır,
+  `prevHash` öncekiyle eşleşir, seq bir artar. İlk bozulan yeri söyler.
+- **Checkpoint toptan takası yakalar:** zincir kendi içinde tutarlı ama farklı
+  bir dosyayla değiştirilmişse, orijinalden yayınlanan checkpoint tutmaz.
+  `matchesCheckpoint` bunu sınar. Checkpoint stdout'a **asla** — Faz 8'de
+  stderr/syslog'a yazılır.
+- **Manifest hash'i davranış tanımlayan alanlar üzerinden** (name, description,
+  inputSchema, annotations), anahtarlar sıralı: sunucu input-schema anahtar
+  sırasını değiştirirse aracı değişmemiştir; parametre eklerse değişmiştir,
+  sıralı serileştirme ikincisini gösterir birincisini değil. `diffServer`
+  added/removed/**altered** ayrımı verir — altered rug-pull şeklidir.
+
+### Çelişki kaydı
+
+Yok. Çekirdek tarafı ADR-004 ve ADR-005'e birebir uydu; ADR-004'ün HMAC
+düzeltmesi zaten Faz 0'da yazılmıştı, burada uygulandı.
+
+### Sonraki faza bırakılan dikişler
+
+- `AuditSink` portu (Faz 2) ve bu kayıt üreticileri Faz 8 CLI'da JSONL
+  yazıcıyla birleşir; append-only dosya, checkpoint stderr/syslog.
+- `guardlock.json` okuma/yazma ve TOFU akışı Faz 8 (`mcpguard lock`).
+- Proxy `tools/list`'i görüp `diffServer` çağıracak — Faz 7.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme

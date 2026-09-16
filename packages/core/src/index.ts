@@ -16,7 +16,30 @@
  * `purity.test.ts` enforces all of it on every source file, and it is not to be
  * relaxed: the auditability claim rests entirely on it.
  */
+export type {
+  AuditFields,
+  AuditKind,
+  AuditRecord,
+  ChainVerification,
+  Checkpoint,
+} from './audit/index.js';
+export {
+  buildRecord,
+  checkpointOf,
+  GENESIS_HASH,
+  matchesCheckpoint,
+  serializeRecord,
+  verifyChain,
+} from './audit/index.js';
 export type { EventType, SecurityEvent, SecurityEventKind } from './domain/events.js';
+export type {
+  GuardLock,
+  ManifestDiff,
+  ServerLock,
+  ToolDefinition,
+  ToolLock,
+} from './lock/index.js';
+export { diffServer, emptyLock, hashTool, lockServer } from './lock/index.js';
 export type {
   AccessEvaluation,
   CallMark,
