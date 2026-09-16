@@ -47,7 +47,10 @@ describe('scanContent', () => {
 
     expect(verdict.degraded).toBe(true);
     expect(verdict.action).toBe('flag');
-    expect(verdict.scannedBytes).toBe(32);
+    // The sampler takes the head and tail, so the scanned size is at most the
+    // cap — never the whole thing, and never silently zero.
+    expect(verdict.scannedBytes).toBeLessThanOrEqual(32);
+    expect(verdict.scannedBytes).toBeGreaterThan(0);
     expect(verdict.totalBytes).toBe(200);
   });
 

@@ -7,7 +7,12 @@
 import type { ScanAction, ScanOptions } from '../types.js';
 
 /** What a score means under one set of thresholds. */
-export function decide(score: number, options: ScanOptions, degraded: boolean): ScanAction {
+export function decide(
+  score: number,
+  options: ScanOptions,
+  degraded: boolean,
+  corroborated = true,
+): ScanAction {
   if (degraded) {
     // A partially scanned item is not a clean one. `flag` is the default
     // because silence is the wrong answer either way, and blocking every large
@@ -21,6 +26,15 @@ export function decide(score: number, options: ScanOptions, degraded: boolean): 
     // opt-in and per-tool (PRD §8), so a tool left on the default gets `flag`
     // no matter how high the score went. The operator decides what enforcement
     // means; the engine only decides what it found.
+    //
+    // And a block needs corroboration — two families, or a critical standalone
+    // finding. One family, however high it scored, can flag or strip but not
+    // block: blocking on a single signal spends the operator's trust on the
+    // scanner's weakest evidence, and a single signal is where the false
+    // positives live.
+    if (!corroborated && options.action === 'block') {
+      return options.action === 'block' ? 'flag' : configured(options);
+    }
     return configured(options);
   }
   if (score >= options.flagAt) {

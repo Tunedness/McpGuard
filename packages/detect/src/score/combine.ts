@@ -34,13 +34,13 @@ const FAMILY_CAP: Record<Family, number> = {
    * saturated with polite imperatives. Capping it here makes it a corroborator
    * by construction: it can reach `flag` alone and never `block`.
    */
-  imperative: 550,
+  imperative: 480,
   unicode: 950,
   encoding: 900,
   exfil: 850,
   frame: 800,
-  /** Cheap structural hints. Never enough on their own. */
-  anomaly: 400,
+  /** Cheap structural hints. Rarely enough on their own. */
+  anomaly: 520,
 };
 
 /** Findings that may carry a verdict without corroboration. */
@@ -48,6 +48,16 @@ export interface CombineInput {
   readonly findings: readonly Finding[];
   /** Rule ids the ruleset marked `standalone`. */
   readonly standalone: ReadonlySet<string>;
+  /**
+   * True when the item reads like a document rather than a tool result.
+   *
+   * Security documentation quotes attacks, often several times, so in a
+   * doc-shaped item the noisy families (signature, imperative) are collapsed to
+   * their single strongest hit and damped: one quote and ten quotes are one
+   * signal, not ten. The structural families are untouched — a doc has no
+   * legitimate reason to carry a tag-block payload or a beacon.
+   */
+  readonly docLike?: boolean;
 }
 
 /** The score, plus the working an operator can check it against. */
@@ -120,9 +130,33 @@ export function combine(input: CombineInput): CombinedScore {
     );
   }
 
+  const damped = input.docLike === true;
   const families = new Map<Family, number>();
   for (const [family, rules] of byFamily) {
-    families.set(family, Math.min(FAMILY_CAP[family], noisyOr([...rules.values()])));
+    const weights = [...rules.values()];
+    if (damped && (family === 'signature' || family === 'imperative')) {
+      // Collapse multiplicity to the single strongest hit, then damp it. This is
+      // what keeps documentation that quotes an attack ten times from scoring
+      // ten times an attack that states it once.
+      const strongest = weights.reduce((max, w) => (w > max ? w : max), 0);
+      families.set(
+        family,
+        Math.min(FAMILY_CAP[family], Math.floor((strongest * 450) / WEIGHT_SCALE)),
+      );
+    } else {
+      families.set(family, Math.min(FAMILY_CAP[family], noisyOr(weights)));
+    }
+  }
+
+  // Imperative mood on its own is not a verdict. Turkish support and
+  // administrative prose is nothing but polite imperatives built from the same
+  // capability verbs an attack uses ("gönderiniz", "iletiniz"), so the verb
+  // cannot separate them — only corroboration can. When imperative is the sole
+  // family, it is halved: enough to lift a borderline attack that also tripped a
+  // signature, never enough to flag a support transcript on its own.
+  if (families.size === 1 && families.has('imperative')) {
+    const value = families.get('imperative') ?? 0;
+    families.set('imperative', Math.floor((value * 500) / WEIGHT_SCALE));
   }
 
   const decisive = input.findings.some(
@@ -131,13 +165,14 @@ export function combine(input: CombineInput): CombinedScore {
   const corroborated = families.size >= 2 || decisive;
 
   const base = noisyOr([...families.values()]);
-  const factor = corroborated ? WEIGHT_SCALE : 700;
-  const scaled = Math.floor((base * factor) / WEIGHT_SCALE);
 
   return {
     // One rounding, at the very end, from the 0–1000 working scale to the 0–100
-    // scale every threshold and report speaks in.
-    score: Math.round(scaled / 10),
+    // scale every threshold and report speaks in. There is no blanket
+    // non-corroboration penalty on the score: a single strong signal is allowed
+    // to flag on its own. What corroboration gates is the *block* band, and that
+    // is decided in `decide()`, where the thresholds live.
+    score: Math.round(base / 10),
     families,
     corroborated,
   };

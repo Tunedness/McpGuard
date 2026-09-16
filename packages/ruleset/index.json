@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "rulesetVersion": "0.1.0",
+  "engineRange": "^0.0.0",
+  "locales": ["und", "en", "tr"],
+  "files": {
+    "rules": "rulesets/injection.v1.json",
+    "verbsEn": "lexicon/verbs.en.json",
+    "verbsTr": "lexicon/verbs.tr.json",
+    "benignImperatives": "lexicon/benign-imperatives.json"
+  }
+}

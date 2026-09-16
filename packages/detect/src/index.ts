@@ -11,6 +11,24 @@
  * from it because ADR-002 says the hot path must be able to move to a native
  * module without dragging the rest of the engine along.
  */
+
+export type {
+  CompiledLexicons,
+  Lexicons,
+  LoadedRuleset,
+  Pattern,
+  Rule,
+  RulesetData,
+} from './ruleset/index.js';
+export {
+  compileRules,
+  engineSatisfies,
+  loadRuleset,
+  RulesetEngineError,
+  RulesetLintError,
+  RulesetSchema,
+  RulesetValidationError,
+} from './ruleset/index.js';
 export type { CompiledRuleset } from './scan.js';
 export { byteLength, EMPTY_RULESET, scanContent } from './scan.js';
 export type { CombinedScore, CombineInput } from './score/index.js';

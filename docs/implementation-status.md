@@ -249,6 +249,92 @@ hâlâ bulgu olarak raporlanıyor, yalnız puan almıyorlar.
 
 ---
 
+## Faz 4 — `@mcpguard/ruleset` + injection tarama motoru (bitti)
+
+Kademe 1 dedektör aileleri, tek normalizasyon geçişi, Aho–Corasick, kural seti
+veri paketi. 220+ yeni test.
+
+```
+packages/detect/src/ac/aho-corasick.ts       tek geçişte tüm literal'ler
+packages/detect/src/normalize/fold.ts        Türkçe-duyarlı + skeleton + homoglyph fold
+packages/detect/src/normalize/{classes,regions,clauses}.ts
+packages/detect/src/normalize/index.ts       tek geçiş, tüm artefaktlar
+packages/detect/src/detectors/signature.ts   imza (literal/phrase/regex), kelime sınırı
+packages/detect/src/detectors/imperative.ts  EN + TR morfoloji, model yok
+packages/detect/src/detectors/unicode.ts     tag-block · bidi · zero-width yoğunluk
+packages/detect/src/detectors/encoding.ts    base64 kapıları + çöz + yeniden tara
+packages/detect/src/detectors/exfil.ts        beacon · tool-invocation · frame
+packages/detect/src/detectors/anomaly.ts      css-hidden · comment · data-appendix
+packages/detect/src/ruleset/{schema,lint,compile,load}.ts
+packages/ruleset/rulesets/injection.v1.json   14 kural
+packages/ruleset/lexicon/*.json               EN/TR fiiller + benign allowlist
+packages/ruleset/src/index.ts                 JSON'ı okuyup ham nesne verir
+bench/injection/results.{md,json}             %100/%0, in-sample uyarısıyla
+```
+
+### Bilinmesi gerekenler
+
+- **Tek normalizasyon geçişi.** `normalize()` case fold + skeleton fold +
+  karakter sınıfları + bölge işaretleri + clause bölme'yi tek `for...of` ile
+  üretir. Dedektörler bunu sabit artefakt olarak okur; 100 KB'lık sonuç kural
+  sayısı kadar değil sabit sayıda kez taranır.
+- **Türkçe fold determinizmi.** `toLocaleLowerCase('tr')` ICU build'e bağlı,
+  o yüzden **kullanılmıyor**. Altı Türkçe harf açık tabloyla, `İ`→tek `i`
+  (yoksa offset kayardı). Skeleton fold ç/ğ/ı/ö/ş/ü'yü Latin'e indirir
+  (deasciified yazımlar) ve Cyrillic/Greek homoglyph'leri de (gizleme).
+- **Kelime sınırı** AC alt-dize eşleşmesinin yan etkisini kesiyor: `key`
+  `keys` içinde bulunmaz. Baştaki sınır her zaman, sondaki yalnız exact
+  token'da (prefix token `talimat`→`talimatları` için kasıtlı). Alt çizgi
+  sınır sayılır: `API_KEY` içindeki `key` bulunur.
+- **İmza tek yerde `new RegExp` kurar** (`ruleset/compile.ts`), bir kez, g/y
+  bayrağı sıyrılmış — `exec` durumsuz. `purity.test.ts` bunu pinliyor.
+- **Skorlama tam sayı, ADR-009.** noisy-OR ayrık kural üzerinden; aile tavanları;
+  tek yuvarlama en sonda. `imperative` tavanı en düşük ve **tek başına flag'e
+  ulaşamaz** — Türkçe destek metni saf emir kipidir.
+- **Doküman-biçimi sönümlemesi** yalnız ≥3 başlık ya da >%25 kod oranında;
+  güvenlik dokümanı (injection'ı *anlatan*) böyle damplanır, kısa markdown
+  saldırı sayfası damplanmaz.
+- **Coverage:** satır/fonksiyon/deyim %90, **branch %80** (config'te gerekçesi
+  yazılı) — `noUncheckedIndexedAccess`'in dayattığı `?? default` fallback'leri
+  branch'i şişiriyor; her gerçek davranışın davranışsal testi var.
+
+### Çelişki kaydı
+
+**Beş ayrı kalibrasyon bulgusu, hepsi ölçümle — hiçbiri tahminle:**
+
+1. **noisy-OR oluşum başına puanlıyordu** (Faz 3'ten taşındı, burada da
+   düzeltildi): aynı kuralın 20 tekrarı bir imza+beacon çiftini geçiyordu.
+   Ayrık kurala geçildi.
+2. **0.7 korroborasyon cezası meşru tek-sinyal saldırılarını eziyordu**
+   (role-switch 38'e düşüyordu). Ceza kaldırıldı; korroborasyon artık yalnız
+   *block* bandını kapılıyor (`decide`), flag'i değil.
+3. **`imperative.tr` Türkçe destekte 55 ateşliyordu** — meşru "gönderiniz"
+   saldırının "gönder"iyle aynı kök. Emir kipi tek aile olduğunda yarıya
+   iniyor; artık yalnız korroborasyon.
+4. **Emoji ZWJ surrogate-pair komşuluğu offset aritmetiğiyle kaçıyordu**
+   (i18n 42 FP). Meşruluk kontrolü kod-noktası dizisi üzerinden yeniden yazıldı.
+5. **replay `mimeType` geçirmiyordu** → markdown sönümlemesi atlanıp skor yapay
+   yükseliyordu. Düzeltilince markdown içi enjeksiyonlar önce kayb/sonra
+   `docLike` eşiği ≥3 başlığa sıkılaştırıldı.
+
+Ve **testVector'lar iki gerçek zayıflık yakaladı:** bare `send_email` imzası
+meşru araç açıklamalarında ateşliyordu (exfil dedektörüne bırakıldı) ve
+"you are now" belirsizdi (negatif-lookahead regex'e çevrildi, "you are now
+logged in" artık eşleşmiyor).
+
+### Sonraki faza bırakılan dikişler
+
+- `ScanVerdict.edits` boş; `strip` eylemi Faz 5.
+- PII tanıyıcıları (`pii/recognizers`) ve maskeleme Faz 5.
+- `@mcpguard/ruleset` şu an yalnız injection kuralları; PII recognizer verisi
+  Faz 5'te aynı pakete girer.
+- Kural setinin kendi digest'ini `index.json`'a damgalayan lint scripti henüz
+  yok; digest şimdilik yükleme anında hesaplanıyor (yeterli, ama tedarik
+  zinciri doğrulaması için P1).
+- Gecikme harness'i (`bench/latency/`) Faz 10.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme

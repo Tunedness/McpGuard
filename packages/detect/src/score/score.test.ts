@@ -97,13 +97,27 @@ describe('combine', () => {
     }
   });
 
-  it('holds a family to its cap however many findings it produces', () => {
+  it('holds a family to its cap however many distinct rules fire', () => {
     const many = Array.from({ length: 30 }, (_, i) =>
-      finding('imperative', 900, { ruleId: `imp.${i}` }),
+      finding('signature', 900, { ruleId: `sig.${i}` }),
     );
     const result = combine({ findings: many, standalone: NONE });
 
-    expect(result.families.get('imperative')).toBe(familyCap('imperative'));
+    expect(result.families.get('signature')).toBe(familyCap('signature'));
+  });
+
+  it('damps imperative mood when it is the only family present', () => {
+    // Turkish support prose is nothing but polite imperatives, so imperative
+    // alone must not reach a flag. It is halved when it stands alone.
+    const solo = combine({ findings: [finding('imperative', 480)], standalone: NONE });
+    const withFriend = combine({
+      findings: [finding('imperative', 480), finding('signature', 480)],
+      standalone: NONE,
+    });
+
+    expect(solo.families.get('imperative')).toBeLessThan(
+      withFriend.families.get('imperative') ?? 0,
+    );
   });
 
   it('produces an integer, never a fraction', () => {

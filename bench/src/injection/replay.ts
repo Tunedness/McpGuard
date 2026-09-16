@@ -36,7 +36,16 @@ export function replay(
 ): ReplayResult[] {
   return items.map((item) => {
     const verdict = scanContent(
-      { id: item.id, text: item.text, kind: item.contentKind, channel: item.toolName },
+      {
+        id: item.id,
+        text: item.text,
+        kind: item.contentKind,
+        // Pass the mime type the server would have sent: it drives the
+        // doc-shape damping, so a scan that omits it is not the scan the proxy
+        // runs, and the number it produces is not the product's.
+        mimeType: item.mimeType,
+        channel: item.toolName,
+      },
       ruleset,
       options,
     );

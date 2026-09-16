@@ -166,7 +166,7 @@ describe('@mcpguard/detect purity', () => {
     const builders = FILES.filter(({ code }) => /\bnew\s+RegExp\s*\(/.test(code)).map(
       ({ relative }) => relative,
     );
-    expect(builders.sort()).toEqual([]);
+    expect(builders.sort()).toEqual(['ruleset/compile.ts']);
   });
 
   it('keeps floating point off the score path', () => {

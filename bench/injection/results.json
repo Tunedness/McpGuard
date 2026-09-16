@@ -1,31 +1,130 @@
 {
-  "engineVersion": "0.0.0",
-  "rulesetVersion": "0.0.0",
+  "engineVersion": "0.1.0",
+  "rulesetVersion": "0.1.0",
+  "rulesetDigest": "0e30de7ccceb0ef760b11ff9a2a867815d5276be1eee16a39ca2cabaf435daa0",
   "corpusSize": 700,
   "chosen": {
-    "flagAt": 80,
+    "flagAt": 40,
     "blockAt": 70,
-    "recall": 0,
+    "recall": 1,
     "falsePositiveRate": 0,
     "precision": 1,
-    "f1": 0,
-    "margin": -79
+    "f1": 1,
+    "margin": 5
   },
   "validation": {
-    "flagAt": 80,
+    "flagAt": 40,
     "blockAt": 70,
-    "recall": 0,
+    "recall": 1,
     "falsePositiveRate": 0,
     "precision": 1,
-    "f1": 0,
-    "margin": -79
+    "f1": 1,
+    "margin": 5
+  },
+  "breakdown": {
+    "positives": {
+      "direct-override": {
+        "caught": 25,
+        "total": 25
+      },
+      "role-switch": {
+        "caught": 25,
+        "total": 25
+      },
+      "exfil-url": {
+        "caught": 25,
+        "total": 25
+      },
+      "exfil-tool": {
+        "caught": 25,
+        "total": 25
+      },
+      "credential-request": {
+        "caught": 25,
+        "total": 25
+      },
+      "hidden-unicode": {
+        "caught": 25,
+        "total": 25
+      },
+      "encoded-payload": {
+        "caught": 25,
+        "total": 25
+      },
+      "html-css-hidden": {
+        "caught": 25,
+        "total": 25
+      },
+      "data-appendix": {
+        "caught": 25,
+        "total": 25
+      },
+      "persistence": {
+        "caught": 25,
+        "total": 25
+      },
+      "multi-part-split": {
+        "caught": 25,
+        "total": 25
+      },
+      "confusable-homoglyph": {
+        "caught": 25,
+        "total": 25
+      }
+    },
+    "negatives": {
+      "security-docs": {
+        "fired": 0,
+        "total": 40
+      },
+      "readme-and-cli-help": {
+        "fired": 0,
+        "total": 40
+      },
+      "tr-support-transcript": {
+        "fired": 0,
+        "total": 40
+      },
+      "code-and-diffs": {
+        "fired": 0,
+        "total": 40
+      },
+      "binary-ish-blobs": {
+        "fired": 0,
+        "total": 40
+      },
+      "i18n-text": {
+        "fired": 0,
+        "total": 40
+      },
+      "logs-and-stacktraces": {
+        "fired": 0,
+        "total": 40
+      },
+      "structured-records": {
+        "fired": 0,
+        "total": 40
+      },
+      "email-threads": {
+        "fired": 0,
+        "total": 40
+      },
+      "prompt-engineering-content": {
+        "fired": 0,
+        "total": 40
+      }
+    }
   },
   "targets": {
     "recall": 0.95,
     "falsePositive": 0.02
   },
   "targetsMet": {
-    "recall": false,
+    "recall": true,
     "falsePositive": true
+  },
+  "gate": {
+    "recall": 1,
+    "falsePositive": 0
   }
 }
