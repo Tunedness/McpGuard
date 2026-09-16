@@ -433,6 +433,60 @@ düzeltmesi zaten Faz 0'da yazılmıştı, burada uygulandı.
 
 ---
 
+## Faz 7 — `@mcpguard/proxy` (bitti, tesisat kısmen doğrulandı)
+
+MCP adaptörü. Motordan bağımsız dosyalar + üç kapı + `wrap` giriş noktası.
+`@modelcontextprotocol/{server,client,core}@2.0.0` üzerinde. 557 test.
+
+```
+packages/proxy/src/era.ts          legacy/modern, çeviri YOK (assertSameEra)
+packages/proxy/src/diagnostics.ts  stderr, prefixli, rate-limitli
+packages/proxy/src/remap.ts        tunedness.session-id ENJEKSİYONU (ADR-006)
+packages/proxy/src/content.ts      ContentBlock text çıkar/geri koy
+packages/proxy/src/guard.ts        tek motoru-tanıyan dosya: scan+access+manifest
+packages/proxy/src/bridge.ts       Server/Client çifti, üç kapı + fallback
+packages/proxy/src/stdio-wrap.ts   child spawn + serveStdio tesisatı
+packages/proxy/src/boundary.test.ts
+```
+
+### Bilinmesi gerekenler
+
+- **`boundary.test.ts`** motoru-tanıyan dosyaları tam olarak `['guard.ts']`'e
+  pinliyor; beşinci bir tanesi karar, kaza değil. Ayrıca hiçbir dosya
+  `console.*`/`process.stdout`'a dokunamaz (wrap modunda stdout ajanın JSON-RPC
+  akışı).
+- **McpGuard'ın AgentFuse'dan farkı `remap.injectSession`:** en dıştaki proxy
+  olduğu için baggage üyesini **yazar**. Var olan trace baggage'ına merge eder,
+  zaten varsa dokunmaz (dıştakinin cevabı kazanır).
+- **`resources/read` üçüncü kapı** — SDK'da içerik tipi var (`ReadResourceResult`)
+  ama guard tarafı McpGuard'da yazıldı; AgentFuse'da bu kapı yok.
+- **Gözlem modu (`enforce: false`) `block`'u `flag`'e düşürür** ama içeriği yine
+  maskeler/strip eder — maskeleme enforcement değil, veri hijyeni.
+
+### Çelişki kaydı — ve dürüst kapsam
+
+**Bridge ve `stdio-wrap`'in SDK tesisatı derleniyor ve yapısal olarak
+AgentFuse'un çalışan desenini taban alıyor, ama bu ortamda gerçek bir MCP
+sunucusuyla uçtan uca koşturulup doğrulanmadı.** AgentFuse da gerçek-süreç
+testlerini (`wrap-process.test.ts`) sonraki faza bırakmıştı; aynı dürüst
+sıralama. Doğrulanan: `content`, `guard`, `era`, `remap`, `diagnostics`,
+`boundary` (35 proxy testi). Doğrulanmayan: `Server`/`Client` köprüsünün gerçek
+stdio boru üzerinden iki era'da da doğru çalışması — **Faz 8'in ilk işi**,
+`examples/` altında zararsız bir fixture sunucu ile.
+
+Ayrıca modern era `serveStdio` bir factory bekliyor; şu anki `stdio-wrap`
+düşük seviyeli `Server` + `StdioServerTransport` kullanıyor (legacy için doğru).
+Modern era serving'i Faz 8'de gerçek koşumla netleşecek.
+
+### Sonraki faza bırakılan dikişler
+
+- Gerçek-süreç `wrap` testi + `examples/noop-server.mjs` — Faz 8.
+- Oturum çözümleme (ULID mint) `wrap`'te CLI tarafında — Faz 8.
+- Manifest kapısı (`tools/list` → `diffServer` → `guardlock.json`) guard'a
+  bağlanacak; şu an `guardList` sadece geçiriyor — Faz 8 lock akışıyla.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme
