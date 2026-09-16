@@ -5,4 +5,7 @@
  * requirements are measurements rather than intentions, and so CI can fail when
  * they move.
  */
-export const BENCH_VERSION = '0.0.0';
+export { generateCorpus, SEED, splitOf, toJsonl } from './injection/corpus.js';
+export { optionsAt, replay } from './injection/replay.js';
+export { metricsAt, partition, sweep } from './injection/sweep.js';
+export type { CorpusItem } from './injection/types.js';

@@ -1,0 +1,53 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/detect/**'
+      - 'packages/ruleset/**'
+      - 'bench/**'
+      - '.github/workflows/bench.yml'
+  pull_request:
+    paths:
+      - 'packages/detect/**'
+      - 'packages/ruleset/**'
+      - 'bench/**'
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detection:
+    name: detection benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      # The corpus is committed and pinned by a test. Regenerating it here and
+      # diffing catches a generator change that would otherwise land silently and
+      # move every number underneath it.
+      - name: Corpus is reproducible
+        run: |
+          node bench/dist/injection/generate.js
+          git diff --exit-code -- bench/injection/corpus.jsonl
+
+      # Runs the real engine over the corpus and rewrites the results. The
+      # committed results move with the ruleset; a change that improves or
+      # regresses detection shows up here as a diff a reviewer reads.
+      - name: Detection results
+        run: |
+          node bench/dist/injection/run.js
+          git diff --exit-code -- bench/injection/results.json bench/injection/results.md
+
+# There is no model to cache and nothing to download, so this runs in seconds
+# and gates every PR that touches the engine, the ruleset or the corpus. The
+# latency benchmark joins it in phase 10.

@@ -8,10 +8,11 @@ o faz sırasında ortaya çıkan çelişkileri tutar.
 
 ## Nerede kaldık
 
-**Faz 2 bitti.** Kapı beş komut ve yeşil, 125 test, `core` coverage %99/%89.
-Sıradaki iş **Faz 3**: `bench/` içinde etiketli korpus ve replay iskeleti —
-tarama motorundan **önce**, çünkü AgentFuse'un kendi kaydı ölçmeden dondurulan
-bir eksenin bedelini anlatıyor.
+**Faz 3 bitti.** 700 öğelik etiketli korpus (300 pozitif / 400 negatif), gerçek
+motoru koşturan replay + sweep hattı, `results.md` PRD §6 hedefini her koşuda
+basıyor. Şu anki taban dürüst: kural seti boş, recall **%0**. 194 test, kapı
+yeşil. Sıradaki iş **Faz 4**: `@mcpguard/ruleset` veri paketi + Kademe 1
+dedektör aileleri, bu korpusa karşı kalibre edilerek.
 
 ---
 
@@ -184,6 +185,67 @@ trafiği bloklamasını engelleyen tek şey.
 - `src/audit/` ve `src/lock/` dizinleri açıldı ve boş — Faz 6'nın yeri.
 - `evaluateCombinations` çağrı geçmişini parametre olarak alıyor; o geçmişi
   kimin tuttuğu (oturum durumu) Faz 7'nin işi.
+
+---
+
+## Faz 3 — korpus ve replay iskeleti (bitti)
+
+Motordan **önce**, bilinçli. Gerekçe AgentFuse'un kendi kaydında: Faz 9'da
+2337 aday çalışma noktasının hiçbiri PRD hedeflerini tutmadı, çünkü sorun eşik
+değil eksendi. Tasarımı ölçmeden dondurmak o bedeli yeniden ödemek olurdu.
+
+```
+packages/detect/src/types.ts         ContentItem · Finding · ScanVerdict — donmuş sözleşme
+packages/detect/src/score/combine.ts noisy-OR, TAM SAYI, aile tavanları
+packages/detect/src/score/decide.ts  skor → allow|flag|strip|block
+packages/detect/src/scan.ts          scanContent — Faz 3 stub'ı, EMPTY_RULESET
+bench/src/rng.ts                      tohumlu mulberry32
+bench/src/injection/types.ts          12 saldırı + 10 zararsız aile
+bench/src/injection/carriers.ts       el yazması zararsız dokümanlar (tuzaklar)
+bench/src/injection/payloads.ts       el yazması saldırı yükleri
+bench/src/injection/obfuscate.ts      tag-block · zero-width · base64 · homoglyph
+bench/src/injection/corpus.ts         üreteç + calibration/validation ayrımı
+bench/src/injection/{replay,sweep,run}.ts
+bench/injection/corpus.jsonl          commit'li, sha256 pinli (corpus.test.ts)
+bench/injection/results.{md,json}     commit'li — recall %0 tabanı
+```
+
+### Bilinmesi gerekenler
+
+- **Skorlama tam sayı ve ADR-009'u zorluyor.** `combine` noisy-OR'u 0-1000
+  ölçeğinde tam sayı bölmesiyle yapıyor, tek yuvarlama en sonda. `purity.test.ts`
+  score/ altında ondalık sayı ve `parseFloat` yasaklıyor.
+- **`imperative` ailesinin tavanı en düşük (550) ve bloklamaya asla ulaşamaz.**
+  Bilinçli: README, CLI help, hata mesajları ve Türkçe destek metni en çok
+  oradan yanlış pozitif üretiyor. Kanıt: score.test.ts.
+- **Korpus 300/400 pozitif/negatif.** Negatif sayısı keyfi değil: 100 negatifle
+  bir yanlış pozitif %1 eder ve "< %2" iddiasının iki öğelik çözünürlüğü kalır;
+  400 ile bir FP %0,25 ve hedefin sekiz öğelik payı olur.
+- **En zor negatif `security-docs`:** injection'ı *anlatan* güvenlik dokümanı,
+  saldırı cümlelerini birebir içerir. `corpus.test.ts` bunun varlığını pinliyor;
+  yumuşatılırsa benchmark var oluş sebebini sınamayı bırakır.
+- **calibration/validation ayrımı** id hash'iyle, aileye göre katmanlı. Çalışma
+  noktası calibration'da seçilir, manşet validation'da ölçülür — korpus ve
+  kural seti aynı elden çıktığı için aynı veride ayarlayıp raporlamak hiçbir
+  şeyin iddiası olmazdı.
+
+### Çelişki kaydı
+
+**`combine` başta oluşum başına puanlıyordu, tekrarı ödüllendiriyordu.** noisy-OR
+her bulguyu ayrı katlayınca, aynı kuralın 20 kez eşleşmesi 20 kat kanıt sayıldı
+ve bir imza + bir beacon çiftini geçti — okuyucunun tam ters sıralayacağı çift.
+Ölçümle yakalandı (score.test.ts: "twenty copies of one rule do not outscore a
+diverse pair", beklenen 63 < 51 ile patladı). Düzeltme: katlama artık **ayrık
+kural** üzerinden, her kural bir kez ve en yüksek ağırlığıyla. Oluşumların hepsi
+hâlâ bulgu olarak raporlanıyor, yalnız puan almıyorlar.
+
+### Sonraki faza bırakılan dikişler
+
+- `scanContent` boş bulgu kümesi döndürüyor; dedektör hattı Faz 4.
+- ADR-009'un "commit'li verdict anlık görüntüsü" (`determinism.test.ts`) Faz
+  4'te gerçek kural setiyle anlamlı olacak — şimdi kural seti boş.
+- Gecikme harness'i (`bench/src/latency/`) Faz 10.
+- `bench.yml` yazıldı: korpus determinizmi + sonuç diff'i, her PR'da.
 
 ---
 

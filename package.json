@@ -20,6 +20,8 @@
     "test:watch": "vitest",
     "schema:generate": "npm run build && npm run schema:generate --workspace @mcpguard/core",
     "schema:check": "npm run build && npm run schema:check --workspace @mcpguard/core",
+    "bench:corpus": "npm run build && node bench/dist/injection/generate.js",
+    "bench:injection": "npm run build && node bench/dist/injection/run.js",
     "lint": "biome check .",
     "format": "biome format --write .",
     "changeset": "changeset",
