@@ -1,0 +1,37 @@
+{
+  "name": "@mcpguard/proxy",
+  "version": "0.0.0",
+  "description": "The McpGuard MCP adapter: a server/client pair that guards tools/call, tools/list and resources/read, and forwards everything else untouched.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/.tsbuildinfo",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@mcpguard/core": "*",
+    "@mcpguard/detect": "*",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/core": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@mcpguard/ruleset",
+  "version": "0.0.0",
+  "description": "The McpGuard detection ruleset: injection signatures, lexicons and PII recognisers, versioned independently of the engine that runs them.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./rulesets/*": "./rulesets/*",
+    "./lexicon/*": "./lexicon/*",
+    "./pii/*": "./pii/*"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/.tsbuildinfo",
+    "rulesets",
+    "lexicon",
+    "pii",
+    "index.json",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

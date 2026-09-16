@@ -1,0 +1,41 @@
+{
+  "name": "@mcpguard/core",
+  "version": "0.0.0",
+  "description": "Pure decision engine for McpGuard: policy, access control, manifest pinning and the hash-chained audit record. No I/O, no protocol.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./policy": {
+      "types": "./dist/policy/index.d.ts",
+      "default": "./dist/policy/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/.tsbuildinfo",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

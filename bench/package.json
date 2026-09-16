@@ -1,0 +1,23 @@
+{
+  "name": "@mcpguard/bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The McpGuard detection corpus, the replay and sweep harness, and the latency harness. Never published.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "corpus:injection": "node dist/injection/generate.js",
+    "bench:injection": "node dist/injection/run.js",
+    "bench:latency": "node dist/latency/run.js"
+  },
+  "dependencies": {
+    "@mcpguard/core": "*",
+    "@mcpguard/detect": "*",
+    "@mcpguard/ruleset": "*"
+  }
+}

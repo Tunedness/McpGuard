@@ -1,0 +1,41 @@
+{
+  "name": "@mcpguard/detect",
+  "version": "0.0.0",
+  "description": "Pure tier-1 detection engine for McpGuard: prompt-injection detectors, PII recognisers, scoring and strip. No I/O, no protocol, no model.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./ruleset": {
+      "types": "./dist/ruleset/index.d.ts",
+      "default": "./dist/ruleset/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/.tsbuildinfo",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

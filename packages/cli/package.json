@@ -1,0 +1,48 @@
+{
+  "name": "mcpguard",
+  "version": "0.0.0",
+  "description": "Put a guard in front of your MCP servers. The McpGuard command line entry point.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "bin": {
+    "mcpguard": "dist/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "!dist/.tsbuildinfo",
+    "NOTICE"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "security",
+    "proxy",
+    "prompt-injection",
+    "pii",
+    "audit"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@mcpguard/core": "*",
+    "@mcpguard/detect": "*",
+    "@mcpguard/proxy": "*",
+    "@mcpguard/ruleset": "*",
+    "yaml": "^2.9.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
