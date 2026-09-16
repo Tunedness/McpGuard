@@ -639,6 +639,50 @@ Yok. ADR-007'ye birebir uydu.
 
 ---
 
+## Faz 12 — dokümanlar ve v0.1.0 (bitti)
+
+README ürünü gerçek haliyle anlatıyor (ölçülmüş rakamlar, in-sample çekince,
+"bilinçle olmayanlar"), paket README'leri, changeset baseline (düzyazı sürüm
+notu), `release.yml` (manuel `workflow_dispatch`, `environment: npm`, tam kapıyı
+yeniden koşturur — yayın bir karardır). `.ssot` PRD'ye v0.1.0 durumu ve P1
+çizgisi yazıldı.
+
+### v0.1.0 nedir, ne değildir
+
+**Olan:** `mcpguard wrap -- <sunucu>` ile tam korumalı proxy — gerçek MCP
+protokolüyle doğrulandı. Deterministik injection taraması (%100/%0 in-sample),
+PII maskeleme, erişim denetimi, manifest sabitleme, hash zincirli audit,
+opsiyonel OTLP telemetri. Komutlar: `wrap`, `scan`, `validate`, `init`,
+`audit`, `lock`.
+
+**Bilinçle olmayan (P1):**
+- **Korumalı HTTP gateway (`serve`)** — koruma `wrap`'te; `serve` reddedip
+  söylüyor. AgentFuse'un `serve` dürüstlüğü emsali.
+- Sağlık verisi PHI redaksiyonu — MVP kimlik maskeleme.
+- Kademe 2 SLM hakem — Kademe 1 tümüyle deterministik.
+- Manifest kapısının `guardlock.json` yaz/kontrol akışının proxy'ye tam
+  bağlanması (çekirdek `diffServer` hazır, `guardList` şu an geçiriyor).
+- Checkpoint syslog sink'i; trace context yayımı.
+
+### Devralan kişiye
+
+1. **Yayın adı/scope kararı verilmeden yayımlama.** `mcpguard` ve `@mcpguard`
+   registry'de boş (Faz 0'da doğrulandı); scope talep edilmeli, sonra
+   `release.yml` publish adımı ve `*_VERSION` sabitleri güncellenmeli.
+2. **`release.yml` iki adımlı:** `version` (changeset PR açar) ve `publish`
+   (`environment: npm`, provenance). Yayın öncesi `*_VERSION` sabitleri
+   manifest'lerle eşitlenmeli (şu an hepsi `0.0.0`).
+3. **Gerçek-süreç testi (`wrap-process.test.ts`) her koşuda çalışır** ve
+   proxy'yi gerçek sunucuyla sınar; kaldırılmamalı.
+4. **Rakamlar yumuşatılmaz:** injection ve latency CI kapıları ulaşılanın
+   kaydı. Düşürülmesi kötüleşme demektir; o zaman konuşulacak şey kapı değil
+   algoritmadır.
+5. P1 manifest bağlama küçük: `guardList` gate'i `diffServer`'a bağla,
+   `on_first_use`/`on_mismatch` politikasını uygula, `guardlock.json`'ı
+   CLI'da oku/yaz.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme

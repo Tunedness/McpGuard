@@ -17,6 +17,7 @@
     "./pii/*": "./pii/*"
   },
   "files": [
+    "README.md",
     "dist",
     "!dist/**/*.map",
     "!dist/.tsbuildinfo",

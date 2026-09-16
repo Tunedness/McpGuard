@@ -1,0 +1,101 @@
+name: Release
+
+# Publishing is a decision, not a consequence of merging: for a tool that sits
+# in front of somebody's agent, the gap between "merged" and "published" is
+# where the last look happens. So this is a button, dispatched by hand, not an
+# `on: push`.
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: 'version (open the release PR) or publish'
+        required: true
+        type: choice
+        options: [version, publish]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The full gate, re-run on the exact commit being released — not a reuse
+      # of CI's result on some earlier commit.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm run schema:check
+
+  version:
+    name: version
+    needs: gate
+    if: ${{ inputs.step == 'version' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx changeset version
+      - run: echo "::notice::Update the *_VERSION constants in src/ to match the bumped manifests before publishing."
+      # Explicit paths, never `git add -A`: this repository owns the code on its
+      # release path.
+      - name: Open the release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="release/$(date -u +%Y%m%dT%H%M%SZ)"
+          git config user.name "mcpguard-release"
+          git config user.email "noreply@tunedness.com"
+          git checkout -b "$BRANCH"
+          git add .changeset packages/*/package.json packages/*/CHANGELOG.md
+          git commit -m "Version packages for release"
+          git push origin "$BRANCH"
+          gh pr create --fill --base main --head "$BRANCH"
+
+  publish:
+    name: publish
+    needs: gate
+    if: ${{ inputs.step == 'publish' }}
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      # Refuse to publish with unconsumed changesets: the versions must already
+      # be bumped by the `version` step.
+      - name: No pending changesets
+        run: test -z "$(ls .changeset/*.md 2>/dev/null | grep -v README)"
+      - run: npx changeset publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+      - run: git push --follow-tags

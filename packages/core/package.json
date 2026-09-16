@@ -23,6 +23,7 @@
     "./schemas/guardpolicy.v1.schema.json": "./schemas/guardpolicy.v1.schema.json"
   },
   "files": [
+    "README.md",
     "dist",
     "!dist/**/*.map",
     "!dist/.tsbuildinfo",
