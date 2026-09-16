@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 /**
  * Hex-encoded SHA-256.
@@ -10,4 +10,15 @@ import { createHash } from 'node:crypto';
  */
 export function sha256(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+/**
+ * Hex-encoded HMAC-SHA-256.
+ *
+ * The correlation tag on a masked value is a truncation of this: an operator
+ * can see the same identity twice without a key to recover it. The key is a
+ * deployment secret supplied by the caller; this package mints no randomness.
+ */
+export function hmacSha256(key: string, input: string): string {
+  return createHmac('sha256', key).update(input, 'utf8').digest('hex');
 }

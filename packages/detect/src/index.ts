@@ -13,6 +13,22 @@
  */
 
 export type {
+  MaskConfig,
+  PiiConfig,
+  PiiKind,
+  PiiMatch,
+} from './pii/index.js';
+export {
+  cardScheme,
+  isValidIbanChecksum,
+  isValidLuhn,
+  isValidTckn,
+  isValidVkn,
+  maskEdits,
+  maskFor,
+  recognize,
+} from './pii/index.js';
+export type {
   CompiledLexicons,
   Lexicons,
   LoadedRuleset,
@@ -33,12 +49,15 @@ export type { CompiledRuleset } from './scan.js';
 export { byteLength, EMPTY_RULESET, scanContent } from './scan.js';
 export type { CombinedScore, CombineInput } from './score/index.js';
 export { combine, decide, familyCap, WEIGHT_SCALE } from './score/index.js';
+export { applyEdits, buildStripEdits, STRIP_MARKER } from './strip.js';
 export type {
   ContentItem,
   ContentKind,
   Edit,
   Family,
   Finding,
+  PiiFinding,
+  PiiScanConfig,
   ScanAction,
   ScanOptions,
   ScanVerdict,

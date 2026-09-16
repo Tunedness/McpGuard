@@ -50,3 +50,18 @@ describe('aho-corasick', () => {
     expect(search(a, 'onceki talimat yok').map((m) => m.id)).toEqual(['tr']);
   });
 });
+
+describe('deep fail links', () => {
+  it('recovers through several fail transitions', () => {
+    const a = buildAutomaton([
+      { id: 'ababc', value: 'ababc' },
+      { id: 'abc', value: 'abc' },
+      { id: 'bc', value: 'bc' },
+    ]);
+    // 'ababc' contains 'abc' and 'bc' via fail links as it is consumed.
+    const ids = search(a, 'ababc')
+      .map((m) => m.id)
+      .sort();
+    expect(ids).toEqual(['ababc', 'abc', 'bc']);
+  });
+});

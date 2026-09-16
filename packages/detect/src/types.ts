@@ -68,15 +68,25 @@ export interface Edit {
   readonly reason: string;
 }
 
+/** A masked piece of PII, for the report and the audit record. Never the raw value. */
+export interface PiiFinding {
+  readonly kind: string;
+  readonly span: Span;
+  /** The masked replacement that went into the forwarded content. */
+  readonly masked: string;
+}
+
 /** The answer. */
 export interface ScanVerdict {
   /** 0–100, integer. */
   readonly score: number;
   readonly action: ScanAction;
   readonly findings: readonly Finding[];
-  /** Present only when the action was `strip`. */
+  /** PII masked in the forwarded content, on its own axis from the action. */
+  readonly piiFindings: readonly PiiFinding[];
+  /** Every edit made to the content — strip neutralisations and PII masks. */
   readonly edits: readonly Edit[];
-  /** The text to forward. Identical to the input unless `strip` ran. */
+  /** The text to forward: masked, and stripped when the action was `strip`. */
   readonly text: string;
   /** True when the item was too large for full rule evaluation. */
   readonly degraded: boolean;
@@ -88,6 +98,17 @@ export interface ScanVerdict {
   readonly rulesetDigest: string;
 }
 
+/** How PII masking is configured for one scan. Absent → no masking. */
+export interface PiiScanConfig {
+  /** Recogniser ids to run; empty runs all shipped recognisers. */
+  readonly recognizers: readonly string[];
+  readonly strictChecksum: boolean;
+  readonly keepLast: number;
+  readonly correlationTags: boolean;
+  /** HMAC key for correlation tags. Absent → tags are omitted. */
+  readonly correlationKey?: string | undefined;
+}
+
 /** The thresholds and posture one scan runs under. */
 export interface ScanOptions {
   readonly action: 'flag' | 'strip' | 'block';
@@ -95,4 +116,6 @@ export interface ScanOptions {
   readonly blockAt: number;
   readonly maxBytes: number;
   readonly onDegraded: 'flag' | 'block' | 'allow';
+  /** PII masking, on its own axis from the injection action. Absent → off. */
+  readonly pii?: PiiScanConfig | undefined;
 }

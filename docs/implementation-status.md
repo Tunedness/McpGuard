@@ -335,6 +335,61 @@ logged in" artık eşleşmiyor).
 
 ---
 
+## Faz 5 — PII tanıyıcıları, maskeleme ve `strip` (bitti)
+
+488 test, kapı yeşil. Checksum'lu tanıyıcılar, maskeleme ve `strip` eylemi
+`scanContent`'e bağlandı — PII injection'dan ayrı bir eksende koşar.
+
+```
+packages/detect/src/pii/checksums.ts   TCKN · VKN · Luhn+scheme · IBAN mod-97
+packages/detect/src/pii/recognizers.ts aday → validator → bağlam üç kademe
+packages/detect/src/pii/mask.ts        [KIND:***tail#tag] · HMAC korelasyon
+packages/detect/src/strip.ts           applyEdits · buildStripEdits · defang
+packages/detect/src/scan.ts            PII + strip tek geçişte entegre
+```
+
+### Bilinmesi gerekenler
+
+- **Checksum kapıdır, varsayılan sıkı.** 11 haneli sayı her yerde; TC kontrol
+  hanesi aday uzayını ~100 kat daraltır. `strict_checksum: false` regüle-kiracı
+  ayarı: checksum düşse de yanında bağlam anahtar kelimesi varsa maskeler
+  (KVKK: hatalı yazılmış TC de kişisel veridir). Bench iki noktayı da raporlar
+  (Faz 10).
+- **Kart:** Luhn **ve** IIN öneki **ve** şema uzunluğu; 13 haneli EAN (978/979)
+  elenir. IBAN: ülke uzunluk tablosu + mod-97, büyük sayı oluşturmadan akış.
+- **Maskeleme kendi ekseninde:** `flag` kararı da maskelenir, `block` zaten
+  içeriği değiştirir. Tanıma **maskesiz** metinde yapılır — kart numarasına
+  benzeyen bir yük, injection dedektörleri görmeden maskelenmemeli.
+- **`strip` en azını yapar:** eşleşen aralık sabit, *talimat gibi okunmayan*
+  `[…]` işaretçisiyle değişir (kural adı vermek saldırgana kehanet olurdu),
+  görünmez unicode silinir, egress URL'i defang edilir (metin görünür kalır,
+  `http`→`hxxp`), çevresi bayt-birebir korunur. Strip çıktısı bir kez yeniden
+  taranır; hâlâ block bandındaysa `block`'a yükselir.
+- **Degraded (büyük) öğe düzenlenmez:** örneklemeden sonra offset'ler
+  hizalanmadığı için maskeleme yanlış yere düşerdi; degraded verdict
+  düzenlenmeden iletilir ve öyle olduğunu söyler.
+- **Korelasyon etiketi** `HMAC(deploymentKey, normalizedValue)`'nin ilk 4 hex'i;
+  aynı kimliği iki yerde görmeye yeter, geri getirmeye yetmez (bilerek çakışır).
+  Anahtar çağırandan gelir — çekirdek rastgelelik üretmez.
+
+### Çelişki kaydı
+
+**VKN checksum'u ilk yazımda yanlıştı.** `tmp===9?9:...` kısayolu Maliye
+algoritmasını bozuyordu; kanonik forma (`t=0 atla; q=(t*2^(9-i))%9; q===0?9:q`)
+düzeltildi ve ileri hesapla üretilen geçerli bir VKN ile doğrulandı. TCKN, IBAN,
+Luhn bilinen geçerli değerlerle test edildi (10000000146, TR33..., 4111...).
+
+### Sonraki faza bırakılan dikişler
+
+- Maskeli içerik + **ham içeriğin HMAC parmak izi** audit kaydına Faz 6'da
+  yazılır (`hmacSha256` çekirdekte hazır). ADR-004'ün 2026-09-16 düzeltmesi bu.
+- Sağlık verisi tanıyıcıları (ICD-10, ATC, MEDULA, quasi-identifier
+  co-occurrence) yazılmadı — PRD "kimlik maskeleme, PHI redaksiyonu değil" diyor;
+  `profile: health` arkasında P1.
+- PII için ayrı bench (`bench/pii/`) Faz 10; iki checksum noktası orada raporlanır.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme
