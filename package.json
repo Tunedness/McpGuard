@@ -22,6 +22,7 @@
     "schema:check": "npm run build && npm run schema:check --workspace @mcpguard/core",
     "bench:corpus": "npm run build && node bench/dist/injection/generate.js",
     "bench:injection": "npm run build && node bench/dist/injection/run.js",
+    "bench:latency": "npm run build && node bench/dist/latency/run.js",
     "lint": "biome check .",
     "format": "biome format --write .",
     "changeset": "changeset",

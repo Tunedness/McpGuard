@@ -553,6 +553,59 @@ ama tam da bu yüzden gerçek-süreç testi değerli: birim test bunu yakalamazd
 
 ---
 
+## Faz 10 — gecikme benchmark'ı (bitti, kalibrasyon Faz 4'te yapıldı)
+
+Tespit kalibrasyonu Faz 4'te tamamlanmıştı (recall %100/FP %0, in-sample).
+Bu faz gecikme bütçesini ölçtü. 586 test.
+
+```
+bench/src/latency/stats.ts   yüzdelik; eklenen gecikme = yüzdelik FARKI
+bench/src/latency/run.ts     boyuta göre maliyet eğrisi
+bench/latency/results.{md,json}
+```
+
+### Ölçülen — PRD §6 p95 < 20 ms
+
+| boyut | p50 | p95 |
+| --- | --- | --- |
+| 1 KB | 0,19 | 0,24 ms |
+| 16 KB | 2,9 | 3,1 ms |
+| 64 KB | 15,1 | 16,0 ms |
+| 128 KB | 31,4 | 33,3 ms |
+| 256 KB | 47,1 | 49,2 ms |
+
+**Referans yükünde MET.** Korpus median öğesi **188 bayt**, p95 **485 bayt** —
+araç sonuçları çoğunlukla küçük. O boyutta p95 ~0,2 ms, muazzam pay. Bütçe
+**~64 KB'ye kadar** tutuyor.
+
+### Bilinmesi gerekenler ve dürüst çekince
+
+- **Tek sayı değil eğri raporlandı:** "p95 < 20 ms" boyut belirtmeden yeterince
+  küçük yük seçilerek doğrulanabilir; o yüzden nerede aşıldığı yazılıyor.
+- **Maliyet boyutla büyür, kural sayısıyla değil** — tek geçiş + Aho-Corasick.
+  İki kat büyük kural seti aynı sürede taranır.
+- **128 KB+ öğe bütçeyi aşar** (~33 ms). Bunlar büyük sonuçlar (dosya/arama).
+  256 KB üstü örneklenir ve degraded işaretlenir — sınırsız girdide bile
+  maliyet sınırlı. Operatörün kolu `scan.max_bytes`.
+- **Eklenen gecikme = yüzdelik farkı**, çağrı-çağrı değil: iki bağımsız koşumu
+  eşleştirmek olmayan bir karşılıklık uydurur.
+- CI (`bench.yml`) latency job'ı `referenceMet`'i kapı yapıyor; rakamlar
+  makineyle oynadığı için diff'lenmiyor.
+
+### Çelişki kaydı
+
+Yok. Ölçüm PRD §6'yı referans yükünde tuttu; büyük-öğe aşımı tasarım gereği
+(maxScanBytes cap + degraded) ve dürüstçe raporlandı.
+
+### Sonraki faza bırakılan dikişler
+
+- **Faz 11 (HTTP gateway) P1'e** — AgentFuse `serve`'ü de korumasız bırakıp
+  dürüstçe yazmıştı; aynı sıralama. `.ssot` PRD zaten "kaçarsa P1" diyor.
+- Faz 9 telemetri opsiyonel; olaylar şu an stderr'e yazılıyor.
+- Faz 12: README güncellemesi, wiki, changeset baseline, release.yml.
+
+---
+
 ## Çalışma kuralları
 
 - **`.ssot` koddan önce gelir** (çatı ADR-002). Kapsam değiştiren geliştirme
