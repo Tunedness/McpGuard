@@ -19,18 +19,22 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
-    }
+    },
+    "./schemas/guardpolicy.v1.schema.json": "./schemas/guardpolicy.v1.schema.json"
   },
   "files": [
     "dist",
     "!dist/**/*.map",
     "!dist/.tsbuildinfo",
+    "schemas",
     "NOTICE"
   ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "schema:generate": "node scripts/generate-schema.mts",
+    "schema:check": "node scripts/generate-schema.mts --check"
   },
   "dependencies": {
     "zod": "^4.6.5"

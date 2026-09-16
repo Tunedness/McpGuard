@@ -1,0 +1,444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.tunedness.com/mcpguard/guardpolicy.v1.schema.json",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "mode": {
+      "default": "flag",
+      "type": "string",
+      "enum": [
+        "flag",
+        "enforce"
+      ]
+    },
+    "servers": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "roles": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tools": {
+      "default": [
+        {
+          "match": "*",
+          "action": "allow"
+        }
+      ],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "match": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "action": {
+            "default": "allow",
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "roles": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "match"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "roles": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "combinations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "all_of": {
+            "minItems": 2,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "action": {
+            "default": "flag",
+            "type": "string",
+            "enum": [
+              "deny",
+              "flag"
+            ]
+          },
+          "window": {
+            "default": "10m",
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d+(ms|s|m|h|d)$"
+              },
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "id",
+          "all_of",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "scan": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "default": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "action": {
+              "default": "flag",
+              "type": "string",
+              "enum": [
+                "flag",
+                "strip",
+                "block"
+              ]
+            },
+            "flag_at": {
+              "default": 40,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "block_at": {
+              "default": 70,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "max_bytes": {
+              "default": 262144,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "on_degraded": {
+              "default": "flag",
+              "type": "string",
+              "enum": [
+                "flag",
+                "block",
+                "allow"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "tools": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "flag",
+                  "strip",
+                  "block"
+                ]
+              },
+              "flag_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "block_at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "max_bytes": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "on_degraded": {
+                "type": "string",
+                "enum": [
+                  "flag",
+                  "block",
+                  "allow"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "rules": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "weight": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "weight",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "pii": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "recognizers": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "strict_checksum": {
+          "default": true,
+          "type": "boolean"
+        },
+        "keep_last": {
+          "default": 0,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "correlation_tags": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "audit": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "path": {
+          "default": ".mcpguard/audit.jsonl",
+          "type": "string",
+          "minLength": 1
+        },
+        "checkpoint_every": {
+          "default": 100,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "checkpoint_to": {
+          "default": "stderr",
+          "type": "string",
+          "enum": [
+            "stderr",
+            "syslog",
+            "none"
+          ]
+        },
+        "key_env": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "lock": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "path": {
+          "default": "guardlock.json",
+          "type": "string",
+          "minLength": 1
+        },
+        "on_first_use": {
+          "default": "write",
+          "type": "string",
+          "enum": [
+            "write",
+            "require"
+          ]
+        },
+        "on_mismatch": {
+          "default": "halt",
+          "type": "string",
+          "enum": [
+            "halt",
+            "flag"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "session": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "key": {
+          "default": "auto",
+          "type": "string",
+          "minLength": 1
+        },
+        "idle_timeout": {
+          "default": "10m",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d+(ms|s|m|h|d)$"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "telemetry": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri"
+        },
+        "service_name": {
+          "default": "mcpguard",
+          "type": "string",
+          "minLength": 1
+        },
+        "headers_env": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "additionalProperties": false,
+  "title": "GuardPolicy v1",
+  "description": "Security policy for McpGuard. Every field is optional except `version`; the defaults are safe (mode: flag, nothing blocked, nothing rewritten)."
+}

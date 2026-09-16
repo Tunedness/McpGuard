@@ -60,6 +60,7 @@ npm run lint
 npm run typecheck
 npm run build
 npm test
+npm run schema:check
 ```
 
 **Reaching green never means relaxing tsconfig strictness, disabling a lint rule

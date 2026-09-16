@@ -8,13 +8,10 @@ o faz sırasında ortaya çıkan çelişkileri tutar.
 
 ## Nerede kaldık
 
-**Faz 1 bitti.** İskelet kuruldu, kapı yeşil, 15 test. Sıradaki iş **Faz 2**:
-`@mcpguard/core` içinde `guardpolicy.v1` zod şeması, erişim denetimi, portlar ve
-`purity.test.ts`.
-
-Kapı şu an dört komut: `lint`, `typecheck`, `build`, `test`. Beşincisi
-(`schema:check`) Faz 2'de şemayla birlikte gelir — var olmayan bir dosyayı
-gösteren bir script, onu koşturan kişi için tuzaktır.
+**Faz 2 bitti.** Kapı beş komut ve yeşil, 125 test, `core` coverage %99/%89.
+Sıradaki iş **Faz 3**: `bench/` içinde etiketli korpus ve replay iskeleti —
+tarama motorundan **önce**, çünkü AgentFuse'un kendi kaydı ölçmeden dondurulan
+bir eksenin bedelini anlatıyor.
 
 ---
 
@@ -119,6 +116,74 @@ ve **gevşetilmemeli** — denetlenebilirlik iddiasının tamamı ona dayanıyor
 ### Çelişki kaydı
 
 Yok. Faz 1 yalnız iskelet kurdu ve `.ssot` ile çelişen bir şeye rastlamadı.
+
+---
+
+## Faz 2 — saf çekirdek: politika, erişim denetimi, portlar (bitti)
+
+`@mcpguard/core`. Tarama yok; sözleşme var. 110 yeni test, `core/src` üzerinde
+%99 statement / %89 branch.
+
+```
+src/util/json.ts      stableStringify — manifest hash'i ve audit zinciri bunun üstünde
+src/util/hash.ts      sha256 · hmacSha256 · digestsEqual
+src/policy/glob.ts    compileGlob · toolKey (`<server>__<tool>`)
+src/policy/duration.ts
+src/policy/schema.ts  guardpolicy.v1 — tek doğruluk kaynağı
+src/policy/parse.ts   parsePolicy · PolicyValidationError (dosya okumaz)
+src/policy/compile.ts globlar bir kez derlenir; sıcak yol regex kurmaz
+src/policy/evaluate.ts evaluateAccess · evaluateCombinations
+src/ports/index.ts    Clock · IdGenerator · AuditKey · AuditSink · TelemetrySink
+src/domain/events.ts  security_event · policy_decision
+src/purity.test.ts    saflığı zorlayan test
+scripts/generate-schema.mts + schemas/guardpolicy.v1.schema.json
+```
+
+**Kapı artık beş komut.** `schema:check` şemayla birlikte geldi ve CI'da ayrı
+bir iş (`schema-drift`, Node 24 — generator `.mts` ve Node'un native type
+stripping'iyle koşuyor).
+
+### Bilinmesi gerekenler
+
+- **`purity.test.ts` bir maddeyi AgentFuse'da olmayan şekilde genişletiyor:**
+  `new RegExp(` yalnız `policy/glob.ts` ve `policy/schema.ts` içinde
+  bulunabilir. Politika bir kez derlenir; sıcak yolda regex kurmak, 20 ms'lik
+  bütçeyi sessizce yiyen şeydir.
+- `digestsEqual` `Buffer` yerine `TextEncoder` kullanıyor — ikisi de global,
+  ama biri web standardı ve öteki bu paketin uzanmak istemediği bir Node
+  ad alanı.
+- Şema `io: 'input'` ile üretiliyor. Çıkış şeklini üretmek, `10m` yazan her
+  politikayı reddeden bir şema doğururdu.
+- Erişim denetiminin varsayılanı **allow** ve bu bilinçli: eşleşmeyen araç
+  geçer. Deny-by-default daha güvenli olurdu ve kurulmazdı; kurulmayan bir
+  güvenlik denetimi kimseyi korumaz. Varsayılan açık olan **izin**dir —
+  tarama, maskeleme ve audit ilk günden açık.
+
+### Çelişki kaydı
+
+**zod'un `.partial()`'ı iç varsayılanları silmiyor ve bu sessiz bir hataydı.**
+`scan.tools` altındaki araç bazlı override `ScanSettingsSchema.partial()` ile
+tanımlanmıştı. `.partial()` anahtarı opsiyonel yapıyor ama alanın kendi
+`.default()`'unu yerinde bırakıyor; sonuç, yalnız `action` yazan bir override'ın
+**tam** bir ayar nesnesine parse olması. Operatörün `scan.default.flag_at: 50`
+değeri, override'ın taşıdığı şema varsayılanı 40 tarafından hiçbir şey
+söylenmeden eziliyordu.
+
+Testle yakalandı (`lays a per-tool scan override over the defaults without
+erasing them`). Düzeltme: alanlar varsayılansız bir kez tanımlanıyor
+(`scanField`), iki şema ondan kuruluyor — biri tam varsayılanlı, öteki tümüyle
+opsiyonel. Birleştirme de spread değil, alan alan yazılmış: yokluğunda en çok
+kaybedilecek alan `action` ve onun varsayılanı, proxy'nin kimsenin istemediği
+trafiği bloklamasını engelleyen tek şey.
+
+### Sonraki faza bırakılan dikişler
+
+- `Ports` arayüzü donduruldu ama hiçbir uygulaması yok; `AuditSink` ve
+  `TelemetrySink` Faz 6 ve Faz 9'da geliyor.
+- `domain/events.ts` olay tiplerini tanımlıyor, yayan kimse yok.
+- `src/audit/` ve `src/lock/` dizinleri açıldı ve boş — Faz 6'nın yeri.
+- `evaluateCombinations` çağrı geçmişini parametre olarak alıyor; o geçmişi
+  kimin tuttuğu (oturum durumu) Faz 7'nin işi.
 
 ---
 

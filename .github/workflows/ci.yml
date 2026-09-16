@@ -42,8 +42,26 @@ jobs:
       - name: Test
         run: npm test
 
-# Two jobs are missing on purpose and arrive with the things they would check:
-# a schema-drift job in phase 2, when there is a policy schema to drift, and the
-# detection and latency benchmarks in phase 10. The benchmarks will live in
-# their own workflow: a red benchmark means something different from a red test,
-# and the two should not be read off one badge.
+  # The GuardPolicy schema is the public contract: people's editors validate
+  # against the committed JSON Schema, while the runtime validates against the
+  # zod object it is generated from. If those two ever disagree, a policy that
+  # looks valid while being typed gets rejected at startup — a bad experience
+  # for any tool, and a dangerous one for the file that says what gets blocked.
+  #
+  # Pinned to Node 24 because the generator is a `.mts` file run through Node's
+  # native type stripping.
+  schema-drift:
+    name: schema drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run schema:check
+
+# The detection and latency benchmarks arrive in phase 10 and will live in their
+# own workflow: a red benchmark means something different from a red test, and
+# the two should not be read off one badge.
