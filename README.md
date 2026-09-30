@@ -1,5 +1,7 @@
 # McpGuard
 
+[![Designed & Maintained with Tan](https://www.muhammetsafak.com.tr/badges/designed-maintained-with-tan.svg)](https://www.muhammetsafak.com.tr/en/tan/)
+
 **A security proxy that sits between an AI client and its MCP servers.** It sees
 every tool call and every result, scans results and resource contents for prompt
 injection with a deterministic rule engine, masks PII on the way through,
