@@ -8,11 +8,24 @@ o faz sırasında ortaya çıkan çelişkileri tutar.
 
 ## Nerede kaldık
 
-**Faz 3 bitti.** 700 öğelik etiketli korpus (300 pozitif / 400 negatif), gerçek
-motoru koşturan replay + sweep hattı, `results.md` PRD §6 hedefini her koşuda
-basıyor. Şu anki taban dürüst: kural seti boş, recall **%0**. 194 test, kapı
-yeşil. Sıradaki iş **Faz 4**: `@mcpguard/ruleset` veri paketi + Kademe 1
-dedektör aileleri, bu korpusa karşı kalibre edilerek.
+**v0.1.0 hazır, yayımlanmadı.** Faz 0–10 ve 12 bitti; Faz 11 (HTTP gateway)
+bilinçle P1'e bırakıldı. `mcpguard wrap -- <sunucu>` gerçek MCP protokolüyle
+doğrulanmış tam korumalı proxy: deterministik injection taraması (700 öğelik
+korpusta %100 recall / %0 FP, in-sample), PII maskeleme, erişim denetimi,
+manifest sabitleme, hash zincirli audit, opsiyonel OTLP telemetri. Son kayıtlı
+test sayısı 595 (Faz 9).
+
+Sıradaki iş:
+
+1. **Yayın adı/scope kararı** — kullanıcının. Karar verilmeden publish yok;
+   ardından `release.yml` publish adımı ve `*_VERSION` sabitleri (şu an `0.0.0`)
+   güncellenir.
+2. **P1 manifest bağlama** (küçük): `guardList` gate'i `diffServer`'a bağlanır,
+   `on_first_use`/`on_mismatch` uygulanır, `guardlock.json` CLI'da okunup yazılır.
+3. Diğer P1'ler: korumalı `serve` gateway, sağlık verisi tanıyıcıları, Kademe 2
+   SLM hakem, checkpoint syslog sink'i, trace context yayımı.
+
+Ayrıntı için bkz. [Faz 12 — Devralan kişiye](#faz-12--dokümanlar-ve-v010-bitti).
 
 ---
 
