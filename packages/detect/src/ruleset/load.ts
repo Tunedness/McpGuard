@@ -4,7 +4,7 @@
  * The ruleset arrives as an already-parsed object — this package reads no
  * files, the CLI and the bench do. Load validates it, checks it targets this
  * engine, computes a digest so any decision can be reproduced against the exact
- * rules that made it, and compiles the patterns once.
+ * rules and lexicons that made it, and compiles the patterns once.
  */
 import type { z } from 'zod';
 import { sha256 } from '../util/hash.js';
@@ -71,9 +71,16 @@ export function loadRuleset(document: unknown): LoadedRuleset {
     throw new RulesetEngineError(data.engineRange);
   }
 
-  // Digest over the canonical form of the rules only: the version and the
-  // engine range describe the package, the rules are what made the decision.
-  const digest = sha256(stableStringify(toJsonValue(data.rules)));
+  // Digest over the canonical form of the data that makes the decision: the
+  // rules and the lexicons, the latter as parsed and defaulted so an absent
+  // lexicon section and an empty one agree. The lexicons are digested because
+  // the imperative and encoding detectors read them and they move the score.
+  // The version and the engine range describe the package, and `locales` is read
+  // by no detector, so none of the three is in it. The PII section, when it
+  // lands, is not in it either: it has its own `piiDigest` (ADR-012).
+  const digest = sha256(
+    stableStringify(toJsonValue({ rules: data.rules, lexicons: data.lexicons })),
+  );
   const compiled = compileRules(data.rules);
 
   return {

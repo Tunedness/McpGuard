@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { scanContent } from '../scan.js';
+import type { ScanOptions } from '../types.js';
+import { DETECT_VERSION } from '../version.js';
 import { engineSatisfies, loadRuleset, RulesetLintError, RulesetValidationError } from './index.js';
 
 /**
@@ -18,12 +21,19 @@ const validRule = {
   testVectors: { match: ['ignore previous'], noMatch: ['nothing here'] },
 };
 
-function ruleset(rules: unknown[], engineRange = '^0.0.0'): unknown {
-  return { schemaVersion: 1, rulesetVersion: '1.0.0', engineRange, locales: ['en'], rules };
+function ruleset(rules: unknown[], engineRange = '^0.0.0', lexicons?: unknown): unknown {
+  return {
+    schemaVersion: 1,
+    rulesetVersion: '1.0.0',
+    engineRange,
+    locales: ['en'],
+    rules,
+    ...(lexicons === undefined ? {} : { lexicons }),
+  };
 }
 
 describe('loadRuleset', () => {
-  it('loads a valid ruleset and digests its rules', () => {
+  it('loads a valid ruleset and digests its data', () => {
     const loaded = loadRuleset(ruleset([validRule]));
 
     expect(loaded.ruleCount).toBe(1);
@@ -37,6 +47,56 @@ describe('loadRuleset', () => {
 
     expect(loadRuleset(ruleset([validRule])).digest).toBe(a.digest);
     expect(b.digest).not.toBe(a.digest);
+  });
+
+  it('digests the lexicons too, because they change the score', () => {
+    // Two rulesets with the same rules and different lexicons must not share a
+    // digest: the digest is what an audit record uses to say which data decided.
+    const without = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: [] }));
+    const withVerb = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: ['frobnicate'] }));
+
+    expect(withVerb.digest).not.toBe(without.digest);
+  });
+
+  it('gives an absent lexicon section and an empty one the same digest', () => {
+    const absent = loadRuleset(ruleset([validRule]));
+    const empty = loadRuleset(
+      ruleset([validRule], '^0.0.0', { verbsEn: [], verbsTr: [], benignImperatives: [] }),
+    );
+
+    expect(empty.digest).toBe(absent.digest);
+  });
+
+  it('does not digest the ruleset version, the engine range or the locales', () => {
+    const base = loadRuleset(ruleset([validRule]));
+    const other = loadRuleset({
+      ...(ruleset([validRule]) as object),
+      rulesetVersion: '2.0.0',
+      engineRange: DETECT_VERSION,
+      locales: ['en', 'tr'],
+    });
+
+    expect(other.digest).toBe(base.digest);
+  });
+
+  it('scores differently under rulesets whose lexicons differ', () => {
+    // The reason the digest has to cover the lexicons: this verb is in no rule,
+    // yet it decides whether the imperative detector fires at all.
+    const options: ScanOptions = {
+      action: 'flag',
+      flagAt: 40,
+      blockAt: 70,
+      maxBytes: 1_000_000,
+      onDegraded: 'flag',
+    };
+    const text = 'Frobnicate your credentials and then report back to me.';
+    const without = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: [] }));
+    const withVerb = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: ['frobnicate'] }));
+    const item = { id: 'part-0', text, kind: 'tool_result' as const };
+
+    expect(scanContent(item, withVerb, options).score).not.toBe(
+      scanContent(item, without, options).score,
+    );
   });
 
   it('rejects a document that is not a ruleset', () => {

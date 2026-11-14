@@ -33,6 +33,11 @@ sunucuya istemcinin capability'leri hiç gitmiyordu, kombinasyon kuralları
 proxy'ye bağlı değildi. Üçü de düzeltildi ve testle kilitli; ayrıntı aşağıdaki
 Faz 25 bölümünde.
 
+**Ruleset digest'i lexicon'ları kapsıyor (Faz 26).** Digest yalnız kuralları
+özetliyordu; lexicon'lar skoru değiştirdiği halde digest'e girmiyordu, yani aynı
+digest'li iki ruleset farklı karar verebiliyordu (ADR-009 madde 2). Düzeltildi ve
+testle kilitli; ayrıntı aşağıdaki Faz 26 bölümünde.
+
 Sıradaki iş:
 
 1. **Yayın adı/scope kararı** — kullanıcının. Karar verilmeden publish yok;
@@ -933,3 +938,41 @@ sonuç kaydı ayrıca gelir.
 - Pin'li modern istemci `StdioClientTransport` ile probe'u kardeş bir süreçte yapıyor
   ve onun stderr'ini atıyor; era uyuşmazlığının sebebi istemcinin değil `wrap`'in
   stderr'inde.
+
+---
+
+## Faz 26 — Ruleset digest'i lexicon'ları da kapsasın (bitti)
+
+Bulgu önce testle yeniden üretildi, sonra düzeltildi.
+
+```
+packages/detect/src/ruleset/load.ts          digest = sha256(stable({ rules, lexicons }))
+packages/detect/src/ruleset/ruleset.test.ts  4 yeni test
+bench/injection/results.json                 yalnız rulesetDigest değişti
+.changeset/lexicon-digest.md                 @mcpguard/detect patch
+```
+
+**Yeniden üretme.** `ruleset.test.ts`'e iki test eklendi: aynı kurallar, farklı
+`verbsEn` ile iki ruleset'in digest'i farklı olmalı; aynı iki ruleset aynı metni
+farklı skorla taramalı (kurallarla eşleşmeyen `frobnicate` fiili imperative
+dedektörünü tetikliyor). Düzeltmeden önce digest testi **kırmızı**, etki testi
+**yeşil** çıktı: aynı digest, farklı skor.
+
+**Düzeltme.** Digest, ayrıştırılmış ve varsayılanları doldurulmuş
+`{ rules, lexicons }` nesnesinin kanonik biçiminden hesaplanıyor; lexicon'u
+olmayan ruleset ile boş listeli olan aynı digest'i veriyor. Küçük harfe çevrilmiş
+derlenmiş hâl kullanılmıyor, digest veriyi tanımlıyor. `rulesetVersion`,
+`engineRange` ve `locales` digest'te değil (ilk ikisi paketi tanımlıyor, `locales`
+hiçbir dedektörde okunmuyor); testle kilitli. Faz 21'in `pii` bölümü bu digest'e
+girmeyecek, ayrı `piiDigest`'e girecek (ADR-012 madde 2); `load.ts`'teki yorum bunu
+söylüyor.
+
+**Etki.** Skor yoluna dokunulmadı: `determinism.test.ts` ve anlık görüntüleri
+değişmedi, injection bench'inde recall/FP/tablolar aynı, yalnız `rulesetDigest`
+satırı değişti (`0e30de7c…` → `ef2c6546…`). Bundan sonra her ruleset'in digest'i
+değişir; eski motor sürümüyle yazılmış audit kayıtlarındaki digest eski formüldedir
+ve o motor sürümüyle yeniden üretilir.
+
+**Devralan kişiye.** `bench/src/injection/run.ts:69` `engineVersion` alanına
+`ruleset.rulesetVersion` yazıyor (motor sürümü değil). Bu fazda dokunulmadı:
+`results.json`'da ikinci bir satırı oynatırdı. Ayrı iş.

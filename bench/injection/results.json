@@ -1,7 +1,7 @@
 {
   "engineVersion": "0.1.0",
   "rulesetVersion": "0.1.0",
-  "rulesetDigest": "0e30de7ccceb0ef760b11ff9a2a867815d5276be1eee16a39ca2cabaf435daa0",
+  "rulesetDigest": "ef2c6546a6339ac67c455e9dab73e7d4091f7dcde33247e665a27479c212dbbd",
   "corpusSize": 700,
   "chosen": {
     "flagAt": 40,
