@@ -27,6 +27,12 @@ karşılaştırılıyor: ilk temasta pinleme (TOFU), sonra `on_mismatch: halt|fl
 ve `mcpguard lock --diff|--accept`. Rug-pull koruması artık anlatıldığı gibi
 çalışıyor; ayrıntı aşağıdaki Faz 15 bölümünde.
 
+**`wrap`'in P0 boşlukları (Faz 25) kapandı.** Üç boşluğun üçü de koşturularak
+doğrulandı ve üçü de doğru çıktı: `wrap` yalnız legacy era'yı sunuyordu, upstream
+sunucuya istemcinin capability'leri hiç gitmiyordu, kombinasyon kuralları
+proxy'ye bağlı değildi. Üçü de düzeltildi ve testle kilitli; ayrıntı aşağıdaki
+Faz 25 bölümünde.
+
 Sıradaki iş:
 
 1. **Yayın adı/scope kararı** — kullanıcının. Karar verilmeden publish yok;
@@ -848,3 +854,82 @@ mesajlarına da uygulanır.
   `packages/proxy/src/{list-tools,index,boundary.test}.ts` (CLI'ya MCP istemci
   bağımlılığı eklememek için tek seferlik liste çağrısı proxy'de) ve yeni
   `manifest-gate.ts`/`lock-file.ts`.
+
+---
+
+## Faz 25 — `wrap`'in P0 boşlukları: era, capability aynalama, kombinasyon kuralları (bitti)
+
+Faz 17'deki tasarım okumasının `wrap`'te gösterdiği üç boşluk. Her biri önce bir
+testle yeniden üretildi (üçü de **kaldı**: bulgu doğruydu), sonra düzeltildi.
+
+```
+packages/proxy/src/stdio-wrap.ts      serveStdio fabrikası; era'ya göre upstream; OpeningObserver
+packages/proxy/src/bridge.ts          forward: istek başına clientCapabilities'i upstream _meta'sına aktarır
+packages/cli/src/runtime.ts           CombinationHistory; onCall'da evaluateCombinations
+packages/cli/src/commands/wrap.ts     WrapHandle.current()/closed; DownstreamView artık geç bağlanıyor
+packages/cli/src/testing/fixtures/    echo-server (read_file, send_http, show_capabilities),
+                                      sampling-server, legacy-only-server, modern-only-server
+```
+
+**1. Era.** `wrap` downstream'i `bridge.server.connect(StdioServerTransport)` ile
+sunuyordu; SDK'da era instance durumu ve yalnız serving entry'ler (`serveStdio`,
+`createMcpHandler`) modern'i işaretliyor, bu yüzden modern bir istemci `server/discover`'a
+cevap alamayıp bağlanamıyordu. Artık `serveStdio(factory)` kullanılıyor: istemcinin
+açılış mesajı era'yı seçiyor, fabrika `{ era }` ile o era için upstream child'ı ve
+bridge'i kuruyor. Modern'de upstream `versionNegotiation: { mode: 'auto' }` ile
+bağlanıyor ve sonuç era `assertSameEra` ile downstream'inkiyle karşılaştırılıyor;
+uyuşmazlık `EraMismatchError` (çeviri yok, ADR-002). Modern açılışta hata fırlatılır
+(istemci bağlanamaz, sebep stderr'de); legacy açılışta `initialize`'a sebebiyle
+birlikte hata dönen bir "reddeden" `Server` verilir, çünkü `serveStdio` modern'de
+`server/discover`'ı kendisi cevaplıyor ve reddeden instance'ın cevabını ezer.
+Bir `server/discover` probe instance'ı legacy'ye düşerken `serveStdio` tarafından
+kapatılır; bridge `server.onclose`'ta upstream `Client`'ı kapatır, child sızmaz.
+
+**Önemli — ADR-011 madde 2 (V1 spike) için ön bilgi.** Bridge `Server`'ı bir
+fabrikadan modern olarak sunuluyor ve stdio'da çalışıyor: modern istemci
+(`pin: '2026-07-28'`) `wrap` üzerinden `tools/call` yapıyor ve tarama uygulanıyor.
+HTTP için henüz denenmedi (`createMcpHandler` istek başına fabrika çağırıyor; her
+istekte upstream bağlamak orada ayrı bir iş). Modern'de MRTR (`input_required`)
+upstream'den downstream'e taşınmıyor, test edilmedi.
+
+**2. Capability aynalama.** Upstream `Client` capability'siz kuruluyordu; sunucu
+"istemcide roots yok" görüyordu. Legacy'de çıkmaz: downstream `initialize`'ına upstream'in
+capability'leriyle cevap vermek, upstream'i ise downstream'in capability'leriyle
+bağlamak gerekiyor. SDK'nın `initialize` işleyicisi `Server` içinde ve capability'ler
+yapıcıda sabit; çözüm `serveStdio`'nun belgeli `transport` seçeneği: `OpeningObserver`
+downstream telin önüne geçip `initialize` (legacy) ve modern zarfındaki capability'leri
+okuyor, hiçbir çerçeveyi değiştirmeden ya da yazmadan geçiriyor; fabrika upstream'i
+bunlarla bağlıyor. Modern'de her istek kendi capability'sini taşıdığından `forward`
+istek başına `io.modelcontextprotocol/clientCapabilities`'i upstream `_meta`'sına yazıyor
+(handler'a gelen istekte zarf SDK tarafından sıyrılmış durumda; yazılmazsa upstream'in
+ilk bağlantıdaki capability'leri geçerli kalırdı).
+
+**3. Kombinasyon kuralları.** `evaluateCombinations` hiçbir yerden çağrılmıyordu.
+`onCall`'da erişim kararından sonra, `forward`'dan önce çalışıyor. `CombinationHistory`
+oturum kimliğiyle anahtarlı, en uzun pencerenin dışına düşeni atan, oturum başına 512
+ve toplam 1024 oturumla, araç adı da 4096 karakterle sınırlı (aşan çağrı geçmişe
+girmez; `deny` kuralı + `enforce` ise reddedilir, değilse bayraklanır) bir depo; `RuntimeDeps.history` ile dışarıdan
+verilebiliyor (Faz 18 HTTP aynı depoyu istek başına çözülen oturumla kullanacak).
+Kurallar `evaluateCombinations`'a olduğu gibi veriliyor; semantiği değişmedi. İki
+ayrıntı bilinmeli: (a) o an yapılan çağrı listenin **başına** konuyor, çünkü fonksiyon
+her glob için ilk eşleşen çağrıyı delil seçiyor ve yalnız delili o çağrıyı içeren
+kurallar sayılıyor — yoksa daha önce tamamlanmış (ve `flag` ile geçirilmiş) bir kural
+alakasız her çağrıda yeniden ateşlenirdi; (b) `all_of` sıralı değil: `read` önce de olsa
+`send` önce de olsa ikinci çağrı tamamlayan olur. `deny` + `enforce`: çağrı reddedilir,
+geçmişe girmez, audit'e `action: deny` ve kural kimliği yazılır (içerik yok; eşleşen
+`server__tool` adları `maskedContent`'te JSON). `flag` ya da `mode: flag`: çağrı geçer,
+olay (`combination_detected`, `policy_decision`) ve audit kaydı yazılır; çağrının kendi
+sonuç kaydı ayrıca gelir.
+
+**Devralan kişiye.**
+- `wrap` artık upstream'i ilk istemci mesajına kadar başlatmıyor. Yanlış yazılmış bir
+  komutun başlangıçta hata vermesi (`cli.test.ts`) için `assertRunnable` komutu
+  PATH'te arıyor; sunucu başlayıp `initialize`'da ölürse hata istemciye gider.
+- `WrapHandle.bridge` kalktı; `current()` ve `closed` geldi (bridge era'ya göre
+  sonradan kuruluyor, probe instance'ı olabilir).
+- `StdioServerTransport` stdin'in `end`'inde kapanmıyor; stdin kapanan bir `wrap`
+  süreci kendiliğinden çıkmıyor. SDK davranışı, Faz 25'ten önce de böyleydi; bu fazda
+  dokunulmadı.
+- Pin'li modern istemci `StdioClientTransport` ile probe'u kardeş bir süreçte yapıyor
+  ve onun stderr'ini atıyor; era uyuşmazlığının sebebi istemcinin değil `wrap`'in
+  stderr'inde.

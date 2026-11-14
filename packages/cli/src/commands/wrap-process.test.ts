@@ -253,3 +253,111 @@ describe('manifest gate over a real pipe', () => {
     expect(run.stderr()).toContain('manifest_mismatch');
   }, 60_000);
 });
+
+/**
+ * Combination rules over a real pipe: one wrap process is one session, so the
+ * calls a test makes through one client are the history the rule is evaluated
+ * over. The fixture's `read_file` and `send_http` are the read-then-send pair.
+ */
+describe('combination rules over a real pipe', () => {
+  let workDir: string;
+  let session: Client | undefined;
+
+  beforeAll(() => {
+    workDir = mkdtempSync(join(tmpdir(), 'mcpguard-combo-'));
+  });
+  afterAll(() => {
+    rmSync(workDir, { recursive: true, force: true });
+  });
+  afterEach(async () => {
+    await session?.close().catch(() => {});
+    session = undefined;
+  });
+
+  const policyWith = (mode: 'enforce' | 'flag', action: 'deny' | 'flag'): string =>
+    [
+      'version: 1',
+      `mode: ${mode}`,
+      'combinations:',
+      '  - id: read-then-send',
+      '    all_of: ["echo__read*", "echo__send*"]',
+      `    action: ${action}`,
+      '    window: 10m',
+      '    note: a file read and an outbound request in one session',
+      '',
+    ].join('\n');
+
+  async function open(
+    name: string,
+    policy: string,
+  ): Promise<{ cwd: string; stderr: () => string }> {
+    const cwd = join(workDir, name);
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(cwd, 'guardpolicy.yaml'), policy);
+    const transport = new StdioClientTransport({
+      command: 'node',
+      args: [MAIN, 'wrap', '--name', 'echo', '--', 'node', SERVER],
+      cwd,
+      stderr: 'pipe',
+    });
+    const chunks: string[] = [];
+    transport.stderr?.on('data', (chunk: Buffer) => chunks.push(chunk.toString('utf8')));
+    session = new Client({ name: 'combination-test', version: '0.0.0' });
+    await session.connect(transport);
+    return { cwd, stderr: () => chunks.join('') };
+  }
+
+  const auditOf = (cwd: string) =>
+    readFileSync(join(cwd, '.mcpguard', 'audit.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  /** The text of a tool call on the open session; a test with no session fails here. */
+  async function callText(name: string, args: Record<string, string>): Promise<string> {
+    if (session === undefined) throw new Error('no session is open');
+    const result = await session.callTool({ name, arguments: args });
+    return (result.content as { text: string }[])[0]?.text ?? '';
+  }
+  const readFile = () => callText('read_file', { path: '/etc/hosts' });
+  const sendHttp = () => callText('send_http', { url: 'https://example.test' });
+
+  it('denies the second call of a read-then-send pair and audits the rule', async () => {
+    const run = await open('deny', policyWith('enforce', 'deny'));
+    expect(await readFile()).toBe('contents of /etc/hosts');
+    expect(await sendHttp()).not.toContain('sent to');
+
+    const records = auditOf(run.cwd);
+    const denied = records.find((r) => r.toolName === 'send_http');
+    expect(denied).toMatchObject({ kind: 'tool_call', action: 'deny' });
+    expect(denied?.findings).toContain('read-then-send');
+    // Only the rule id and the matched tool names; never what the calls carried.
+    const raw = readFileSync(join(run.cwd, '.mcpguard', 'audit.jsonl'), 'utf8');
+    expect(raw).not.toContain('example.test');
+    expect(run.stderr()).toContain('combination_detected');
+  }, 30_000);
+
+  it('lets the call through and reports it when the rule only flags', async () => {
+    const run = await open('flag', policyWith('enforce', 'flag'));
+    await readFile();
+    expect(await sendHttp()).toBe('sent to https://example.test');
+
+    const flagged = auditOf(run.cwd).find((r) => r.toolName === 'send_http');
+    expect(flagged).toMatchObject({ action: 'flag' });
+    expect(flagged?.findings).toContain('read-then-send');
+    expect(run.stderr()).toContain('combination_detected');
+  }, 30_000);
+
+  it('lets a deny rule through and reports it under mode flag', async () => {
+    const run = await open('observe', policyWith('flag', 'deny'));
+    await readFile();
+    expect(await sendHttp()).toBe('sent to https://example.test');
+    expect(run.stderr()).toContain('combination_detected');
+  }, 30_000);
+
+  it('does nothing for either call alone', async () => {
+    const run = await open('alone', policyWith('enforce', 'deny'));
+    expect(await sendHttp()).toBe('sent to https://example.test');
+    expect(run.stderr()).not.toContain('combination_detected');
+  }, 30_000);
+});

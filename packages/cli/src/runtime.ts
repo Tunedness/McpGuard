@@ -6,15 +6,18 @@
  * and threads the session id and the audit sink through. The proxy knows the
  * gates turn a request into a result; this is where they learn how.
  */
-import type {
-  AuditFields,
-  CompiledPolicy,
-  GuardPolicy,
-  IdentityResolution,
-  SecurityEvent,
-  SecurityEventKind,
-  TelemetrySink,
-  ToolDefinition,
+import {
+  type AuditFields,
+  type CallMark,
+  type CompiledPolicy,
+  evaluateCombinations,
+  type GuardPolicy,
+  type IdentityResolution,
+  type SecurityEvent,
+  type SecurityEventKind,
+  type TelemetrySink,
+  type ToolDefinition,
+  toolKey,
 } from '@mcpguard/core';
 import type { CompiledRuleset, ScanOptions } from '@mcpguard/detect';
 import { scanContent } from '@mcpguard/detect';
@@ -59,11 +62,73 @@ export interface RuntimeDeps {
   readonly lock?: LockStore | undefined;
   /** Asks the upstream for its whole tool list, for the manifest check before a first call. */
   readonly fetchTools?: (() => Promise<readonly unknown[]>) | undefined;
+  /**
+   * What each session has called, for the combination rules. Absent, a store is
+   * made for this set of gates; a host that serves many sessions through one
+   * set of gates passes one it shares, keyed by whatever session id it resolves.
+   */
+  readonly history?: CombinationHistory | undefined;
   readonly clock: () => number;
   /** Reports a security event to stderr diagnostics. */
   readonly onEvent: (event: string, detail: Record<string, unknown>) => void;
   /** The OTLP sink, off by default. */
   readonly telemetry: TelemetrySink;
+}
+
+/** The most calls remembered for one session. The oldest go first. */
+export const MAX_HISTORY_PER_SESSION = 512;
+/**
+ * The longest tool name the history will hold. Real names are a few dozen
+ * characters; the name comes from the client and is kept whole so globs match it
+ * whole, so without a ceiling the count caps above would bound entries but not bytes.
+ */
+export const MAX_TRACKED_NAME_LENGTH = 4_096;
+/** The most sessions remembered at once. The one touched longest ago goes first. */
+export const MAX_HISTORY_SESSIONS = 1_024;
+
+/**
+ * The calls each session has made, for the combination rules (PRD 7.5).
+ *
+ * Keyed by session id and owned by no one session, so a host that resolves a
+ * session per request can share one store across all of them. Bounded three
+ * ways: a mark older than the longest rule window can never matter and is
+ * dropped, a session keeps at most {@link MAX_HISTORY_PER_SESSION} marks, and
+ * at most {@link MAX_HISTORY_SESSIONS} sessions are kept. The caps cost
+ * a missed combination only for a session that made hundreds of calls inside
+ * one window, or after a thousand other sessions have come and gone.
+ */
+export class CombinationHistory {
+  private readonly sessions = new Map<string, CallMark[]>();
+
+  /** @param horizonMs the longest window of any rule: older marks are dead weight. */
+  constructor(private readonly horizonMs: number) {}
+
+  /** The marks of `sessionId` still inside the horizon, oldest first. */
+  recent(sessionId: string, now: number): readonly CallMark[] {
+    const since = now - this.horizonMs;
+    return (this.sessions.get(sessionId) ?? []).filter((mark) => mark.at >= since);
+  }
+
+  /** Remembers a call that is going to happen. */
+  record(sessionId: string, mark: CallMark): void {
+    const marks = [...this.recent(sessionId, mark.at), mark].slice(-MAX_HISTORY_PER_SESSION);
+    // Re-inserted, so the Map's iteration order is least-recently-used first.
+    this.sessions.delete(sessionId);
+    this.sessions.set(sessionId, marks);
+    while (this.sessions.size > MAX_HISTORY_SESSIONS) {
+      const oldest = this.sessions.keys().next().value;
+      if (oldest === undefined) break;
+      this.sessions.delete(oldest);
+    }
+  }
+
+  /**
+   * Forgets a session that has ended. Nothing in `wrap` calls it: its one session
+   * lives as long as the process. The HTTP gateway (Faz 18) will, when a session ends.
+   */
+  forget(sessionId: string): void {
+    this.sessions.delete(sessionId);
+  }
 }
 
 /** A writer that turns fields plus raw content into a chained, appended record. */
@@ -264,6 +329,128 @@ export function buildGates(deps: RuntimeDeps): Gates {
 
   const scanTool = toolScanner(deps);
 
+  const rules = deps.compiledPolicy.combinations;
+  const history =
+    rules.length === 0
+      ? undefined
+      : (deps.history ??
+        new CombinationHistory(Math.max(...rules.map((combination) => combination.rule.window))));
+
+  /**
+   * Checks one call that access control has let through against the combination
+   * rules, and says whether it must be refused.
+   *
+   * The call is tried as the newest entry of the session's history, and only a
+   * rule whose evidence includes *this* call counts: a rule satisfied earlier
+   * (and let through under `flag`) must not fire again on an unrelated call.
+   * `evaluateCombinations` prefers the earliest call it can assign to a glob, so
+   * the call under test is handed over first: whenever any complete assignment
+   * uses it, it is in the evidence.
+   *
+   * A refused call is not remembered, because it did not happen.
+   */
+  const checkCombinations = (toolName: string, caller: IdentityResolution): boolean => {
+    if (history === undefined) return false;
+    const now = deps.clock();
+    if (toolName.length > MAX_TRACKED_NAME_LENGTH) {
+      // A name this long cannot be remembered, and clipping it would let a
+      // suffix glob be dodged, so the call is judged on what the rules would have
+      // done: refused if one of them denies, otherwise let through and reported.
+      const refused = enforce && rules.some((combination) => combination.rule.action === 'deny');
+      const action = refused ? 'deny' : 'flag';
+      deps.onEvent('combination_detected', {
+        tool: toolName.slice(0, MAX_DIFF_NAME_LENGTH),
+        rule: 'combination.name_too_long',
+        action,
+        length: toolName.length,
+        identity: caller.identity,
+        identitySource: caller.source,
+        identityExact: caller.exact,
+      });
+      emit(
+        'combination_detected',
+        'policy_decision',
+        toolName.slice(0, MAX_DIFF_NAME_LENGTH),
+        action,
+        undefined,
+        ['combination.name_too_long'],
+        caller,
+      );
+      record(
+        'tool_call',
+        toolName.slice(0, MAX_DIFF_NAME_LENGTH),
+        action,
+        undefined,
+        ['combination.name_too_long'],
+        [],
+        JSON.stringify({ reason: 'name_too_long', length: toolName.length }),
+        '',
+        caller,
+      );
+      return refused;
+    }
+    const mark: CallMark = {
+      serverName: deps.serverName,
+      // Whole, not clipped: the globs are matched against it, and a clipped name
+      // would lose the suffix a pattern like `*_upload` is written for.
+      toolName,
+      at: now,
+    };
+    const hits = evaluateCombinations(
+      deps.compiledPolicy,
+      [mark, ...history.recent(deps.sessionId, now)],
+      now,
+    ).filter((hit) => hit.evidence.includes(mark));
+    if (hits.length === 0) {
+      history.record(deps.sessionId, mark);
+      return false;
+    }
+    const refused = enforce && hits.some((hit) => hit.action === 'deny');
+    // Clipped for what is written out, never for what is matched.
+    const matched = (evidence: readonly CallMark[]): string[] =>
+      evidence.map((entry) =>
+        toolKey(entry.serverName, entry.toolName).slice(0, MAX_DIFF_NAME_LENGTH),
+      );
+    for (const hit of hits) {
+      const action = enforce && hit.action === 'deny' ? 'deny' : 'flag';
+      deps.onEvent('combination_detected', {
+        tool: toolName,
+        rule: hit.id,
+        action,
+        matched: matched(hit.evidence),
+        note: hit.note,
+        identity: caller.identity,
+        identitySource: caller.source,
+        identityExact: caller.exact,
+      });
+      emit(
+        'combination_detected',
+        'policy_decision',
+        toolName,
+        action,
+        undefined,
+        [hit.id, ...matched(hit.evidence)],
+        caller,
+      );
+    }
+    // Rule ids and the tool names that satisfied them; never what the calls carried (ADR-004).
+    record(
+      'tool_call',
+      toolName,
+      refused ? 'deny' : 'flag',
+      undefined,
+      hits.map((hit) => hit.id),
+      [],
+      JSON.stringify({
+        combinations: hits.map((hit) => ({ rule: hit.id, matched: matched(hit.evidence) })),
+      }),
+      '',
+      caller,
+    );
+    if (!refused) history.record(deps.sessionId, mark);
+    return refused;
+  };
+
   const reportManifest = (event: ManifestEvent): void => {
     const caller = deps.resolveIdentity();
     switch (event.kind) {
@@ -425,6 +612,9 @@ export function buildGates(deps: RuntimeDeps): Gates {
           '',
           caller,
         );
+        return blockedResult('deny', 0, deps.ruleset.rulesetVersion) as never;
+      }
+      if (checkCombinations(toolName, caller)) {
         return blockedResult('deny', 0, deps.ruleset.rulesetVersion) as never;
       }
       const upstream = await forward();

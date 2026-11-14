@@ -10,7 +10,15 @@ import { describe, expect, it } from 'vitest';
 import { AuditWriter } from './audit-writer.js';
 import type { LockState, LockStore } from './lock-file.js';
 import { loadShippedRuleset } from './ruleset.js';
-import { buildGates, MAX_CLIENT_NAME_LENGTH, resolveIdentity } from './runtime.js';
+import {
+  buildGates,
+  CombinationHistory,
+  MAX_CLIENT_NAME_LENGTH,
+  MAX_HISTORY_PER_SESSION,
+  MAX_HISTORY_SESSIONS,
+  MAX_TRACKED_NAME_LENGTH,
+  resolveIdentity,
+} from './runtime.js';
 
 /**
  * The runtime's promises, tested through the gates the bridge calls: what the
@@ -36,6 +44,8 @@ function rig(options: {
   identity?: IdentityResolution;
   correlationKey?: string;
   lock?: LockStore;
+  clock?: () => number;
+  history?: CombinationHistory;
   onEvent?: (event: string, detail: Record<string, unknown>) => void;
 }): Rig {
   const policy = parsePolicy({ version: 1, ...options.policy });
@@ -60,7 +70,8 @@ function rig(options: {
     resolveIdentity: () => options.identity ?? resolveIdentity({}),
     correlationKey: options.correlationKey,
     audit,
-    clock: () => 1_000,
+    clock: options.clock ?? (() => 1_000),
+    ...(options.history !== undefined ? { history: options.history } : {}),
     ...(options.lock !== undefined ? { lock: options.lock } : {}),
     onEvent: options.onEvent ?? (() => {}),
     telemetry: { emit: (event) => events.push(event) },
@@ -366,5 +377,286 @@ describe('the tools/list gate', () => {
     if (lock.state.kind !== 'ok') throw new Error('expected a pinned lock');
     const pinned = lock.state.lock;
     expect(pinned.servers.echo?.tools[0]?.findings).toContain('inj.en.override.ignore-previous');
+  });
+});
+
+/**
+ * Combination rules (PRD 7.5): the gate remembers what a session called and
+ * judges each new call against it. The clock is injected, so a window is
+ * exercised without waiting for one.
+ */
+describe('combination rules', () => {
+  const rule = (action: 'deny' | 'flag', window = '10m') => ({
+    combinations: [
+      {
+        id: 'read-then-send',
+        all_of: ['echo__read*', 'echo__send*'],
+        action,
+        window,
+        note: 'a read and an outbound request in one session',
+      },
+    ],
+  });
+  const call = (name: string) =>
+    ({ method: 'tools/call', params: { name, arguments: { secret: 'do-not-record' } } }) as never;
+  const ok = async () => ({ content: [{ type: 'text', text: 'done' }] }) as never;
+  const isBlocked = (result: unknown): boolean =>
+    JSON.stringify(result).includes('blocked') ||
+    (result as { isError?: boolean }).isError === true;
+
+  /** A rig with a clock the test moves. */
+  function timed(options: Parameters<typeof rig>[0]) {
+    let now = 1_000_000;
+    return {
+      ...rig({ ...options, clock: () => now }),
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  }
+
+  it('refuses the call that completes a deny combination and audits the rule, not the content', async () => {
+    const r = timed({ policy: { mode: 'enforce', ...rule('deny') } });
+    expect(isBlocked(await r.gates.onCall(call('read_file'), ok))).toBe(false);
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(true);
+
+    const refused = r.records().find((record) => record.toolName === 'send_http');
+    expect(refused).toMatchObject({ kind: 'tool_call', action: 'deny' });
+    expect(refused?.findings).toEqual(['read-then-send']);
+    expect(refused?.maskedContent).toContain('echo__read_file');
+    expect(refused?.maskedContent).toContain('echo__send_http');
+    expect(JSON.stringify(r.records())).not.toContain('do-not-record');
+    expect(r.events.map((event) => [event.kind, event.type, event.action])).toEqual([
+      ['combination_detected', 'policy_decision', 'deny'],
+    ]);
+    expect(r.events[0]?.evidence).toEqual(['read-then-send', 'echo__read_file', 'echo__send_http']);
+  });
+
+  it('catches a pair whose globs overlap, in either written order', async () => {
+    for (const allOf of [
+      ['echo__*', 'echo__send*'],
+      ['echo__read*', 'echo__*'],
+    ]) {
+      const r = timed({
+        policy: {
+          mode: 'enforce',
+          combinations: [
+            { id: 'overlap', all_of: allOf, action: 'deny', window: '10m', note: 'n' },
+          ],
+        },
+      });
+      expect(isBlocked(await r.gates.onCall(call('read_file'), ok))).toBe(false);
+      expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(true);
+    }
+  });
+
+  it('catches a three-glob rule on the call that completes it', async () => {
+    const r = timed({
+      policy: {
+        mode: 'enforce',
+        combinations: [
+          {
+            id: 'triple',
+            all_of: ['echo__*', 'echo__read*', 'echo__send*'],
+            action: 'deny',
+            window: '10m',
+            note: 'n',
+          },
+        ],
+      },
+    });
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(false);
+    expect(isBlocked(await r.gates.onCall(call('read_file'), ok))).toBe(false);
+    expect(isBlocked(await r.gates.onCall(call('list_dir'), ok))).toBe(true);
+  });
+
+  it('matches a suffix glob against a tool name longer than the output clip', async () => {
+    const long = `${'x'.repeat(250)}_upload`;
+    const r = timed({
+      policy: {
+        mode: 'enforce',
+        combinations: [
+          {
+            id: 'upload',
+            all_of: ['echo__read*', 'echo__*_upload'],
+            action: 'deny',
+            window: '10m',
+            note: 'n',
+          },
+        ],
+      },
+    });
+    await r.gates.onCall(call('read_file'), ok);
+    expect(isBlocked(await r.gates.onCall(call(long), ok))).toBe(true);
+    // The matched names written into the record are clipped.
+    const refused = r.records().find((record) => record.action === 'deny');
+    expect(String(refused?.maskedContent)).not.toContain('x'.repeat(250));
+  });
+
+  it('refuses a call whose name is too long to remember when a rule denies, without storing it', async () => {
+    const history = new CombinationHistory(10 * 60_000);
+    const r = timed({ policy: { mode: 'enforce', ...rule('deny') }, history });
+    const huge = 'x'.repeat(MAX_TRACKED_NAME_LENGTH + 1);
+    expect(isBlocked(await r.gates.onCall(call(huge), ok))).toBe(true);
+    expect(history.recent('01TESTSESSION', 1_000_000)).toHaveLength(0);
+    const refused = r.records().find((record) => record.action === 'deny');
+    expect(refused?.findings).toEqual(['combination.name_too_long']);
+    expect(JSON.stringify(r.records())).not.toContain('x'.repeat(MAX_TRACKED_NAME_LENGTH));
+    expect(r.events[0]?.evidence).toEqual(['combination.name_too_long']);
+  });
+
+  it('only reports a too-long name when no rule denies, or the mode is flag', async () => {
+    for (const options of [
+      { policy: { mode: 'enforce', ...rule('flag') } },
+      { policy: { mode: 'flag', ...rule('deny') } },
+    ]) {
+      const r = timed(options);
+      const huge = 'x'.repeat(MAX_TRACKED_NAME_LENGTH + 1);
+      expect(isBlocked(await r.gates.onCall(call(huge), ok))).toBe(false);
+      expect(r.events.map((event) => event.action)).toEqual(['flag']);
+    }
+  });
+
+  it('still remembers and matches a name at the limit', async () => {
+    const atLimit = `${'s'.repeat(MAX_TRACKED_NAME_LENGTH - 4)}_end`;
+    expect(atLimit).toHaveLength(MAX_TRACKED_NAME_LENGTH);
+    const history = new CombinationHistory(10 * 60_000);
+    const r = timed({
+      policy: {
+        mode: 'enforce',
+        combinations: [
+          {
+            id: 'long-suffix',
+            all_of: ['echo__read*', 'echo__s*_end'],
+            action: 'deny',
+            window: '10m',
+            note: 'n',
+          },
+        ],
+      },
+      history,
+    });
+    expect(isBlocked(await r.gates.onCall(call('read_file'), ok))).toBe(false);
+    // The name at the limit completes the rule through its suffix, so it was
+    // matched whole, and the refusal is the rule's, not the length's.
+    expect(isBlocked(await r.gates.onCall(call(atLimit), ok))).toBe(true);
+    const refused = r.records().find((record) => record.action === 'deny');
+    expect(refused?.findings).toEqual(['long-suffix']);
+    // A refused call is not remembered; only the read is.
+    expect(history.recent('01TESTSESSION', 1_000_000)).toHaveLength(1);
+  });
+
+  it('does not run the refused call upstream', async () => {
+    const r = timed({ policy: { mode: 'enforce', ...rule('deny') } });
+    await r.gates.onCall(call('read_file'), ok);
+    let reached = false;
+    await r.gates.onCall(call('send_http'), async () => {
+      reached = true;
+      return ok();
+    });
+    expect(reached).toBe(false);
+  });
+
+  it('lets a flag rule through, and says so in the record and the event', async () => {
+    const r = timed({ policy: { mode: 'enforce', ...rule('flag') } });
+    await r.gates.onCall(call('read_file'), ok);
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(false);
+    const flagged = r.records().filter((record) => record.toolName === 'send_http');
+    expect(flagged[0]).toMatchObject({ action: 'flag', findings: ['read-then-send'] });
+    expect(r.events.map((event) => event.action)).toEqual(['flag']);
+  });
+
+  it('only reports under mode flag, even for a deny rule', async () => {
+    const r = timed({ policy: { mode: 'flag', ...rule('deny') } });
+    await r.gates.onCall(call('read_file'), ok);
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(false);
+    expect(r.events.map((event) => event.action)).toEqual(['flag']);
+  });
+
+  it('does not fire when the first call has left the window', async () => {
+    const r = timed({ policy: { mode: 'enforce', ...rule('deny', '10m') } });
+    await r.gates.onCall(call('read_file'), ok);
+    r.advance(10 * 60_000 + 1);
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(false);
+    expect(r.events).toEqual([]);
+  });
+
+  it('fires when the first call is still inside the window', async () => {
+    const r = timed({ policy: { mode: 'enforce', ...rule('deny', '10m') } });
+    await r.gates.onCall(call('read_file'), ok);
+    r.advance(10 * 60_000 - 1);
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(true);
+  });
+
+  it('does not remember a refused call, since it never happened', async () => {
+    const r = timed({ policy: { mode: 'enforce', ...rule('deny') } });
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(false);
+    // The read completes the pair with the send that went through, and is refused.
+    expect(isBlocked(await r.gates.onCall(call('read_file'), ok))).toBe(true);
+    // Had the refused read been kept, this second send would be refused as well.
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(false);
+    expect(isBlocked(await r.gates.onCall(call('read_file'), ok))).toBe(true);
+  });
+
+  it('does not fire again on a call that is not part of the combination', async () => {
+    const r = timed({ policy: { mode: 'enforce', ...rule('flag') } });
+    await r.gates.onCall(call('read_file'), ok);
+    await r.gates.onCall(call('send_http'), ok);
+    r.events.length = 0;
+    await r.gates.onCall(call('echo'), ok);
+    expect(r.events).toEqual([]);
+    // A later member call is part of it again.
+    await r.gates.onCall(call('send_http'), ok);
+    expect(r.events).toHaveLength(1);
+  });
+
+  it('uses a history it is handed, keyed by its own session id', async () => {
+    const history = new CombinationHistory(10 * 60_000);
+    const r = timed({ policy: { mode: 'enforce', ...rule('deny') }, history });
+    await r.gates.onCall(call('read_file'), ok);
+    expect(history.recent('01TESTSESSION', 1_000_000)).toHaveLength(1);
+    expect(history.recent('01OTHERSESSION', 1_000_000)).toHaveLength(0);
+  });
+
+  it('stays out of the way when the policy has no combination rules', async () => {
+    const r = timed({ policy: { mode: 'enforce' } });
+    await r.gates.onCall(call('read_file'), ok);
+    expect(isBlocked(await r.gates.onCall(call('send_http'), ok))).toBe(false);
+    expect(r.events).toEqual([]);
+  });
+});
+
+describe('CombinationHistory bounds', () => {
+  const mark = (at: number, toolName = 'read_file') => ({ serverName: 'echo', toolName, at });
+
+  it('drops marks older than the horizon', () => {
+    const history = new CombinationHistory(1_000);
+    history.record('s', mark(0));
+    history.record('s', mark(5_000));
+    expect(history.recent('s', 5_000).map((entry) => entry.at)).toEqual([5_000]);
+  });
+
+  it('keeps no more than the per-session cap, newest last', () => {
+    const history = new CombinationHistory(10_000_000);
+    for (let i = 0; i < MAX_HISTORY_PER_SESSION + 10; i++) history.record('s', mark(i));
+    const kept = history.recent('s', MAX_HISTORY_PER_SESSION + 10);
+    expect(kept).toHaveLength(MAX_HISTORY_PER_SESSION);
+    expect(kept.at(-1)?.at).toBe(MAX_HISTORY_PER_SESSION + 9);
+  });
+
+  it('forgets the session touched longest ago when too many are kept', () => {
+    const history = new CombinationHistory(10_000_000);
+    for (let i = 0; i < MAX_HISTORY_SESSIONS; i++) history.record(`s${i}`, mark(i));
+    history.record('s0', mark(5_000)); // s0 is now the most recent
+    history.record('extra', mark(5_001));
+    expect(history.recent('s0', 5_001).length).toBeGreaterThan(0);
+    expect(history.recent('s1', 5_001)).toHaveLength(0);
+  });
+
+  it('forgets a session on request', () => {
+    const history = new CombinationHistory(10_000);
+    history.record('s', mark(1));
+    history.forget('s');
+    expect(history.recent('s', 1)).toHaveLength(0);
   });
 });

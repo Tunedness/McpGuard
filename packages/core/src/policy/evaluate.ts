@@ -81,7 +81,14 @@ export interface CombinationHit {
  *
  * Every member glob has to be satisfied by a call inside the window, and one
  * call may satisfy only one glob — otherwise a single tool matching two loose
- * patterns would trip a rule about two capabilities all by itself.
+ * patterns would trip a rule about two capabilities all by itself. That is an
+ * assignment problem, not a first-fit one: with `['fs__*', 'fs__read_*']` and the
+ * calls `read_file`, `list_dir`, handing `read_file` to the broad glob first
+ * leaves the narrow one with nothing, though `list_dir` + `read_file` is exactly
+ * the pair the rule describes. Calls are therefore assigned to globs by bipartite
+ * matching (augmenting paths), which finds a complete assignment whenever one
+ * exists. Where several exist the earliest calls in `history` win, and the
+ * evidence lists them in the order the globs were written.
  *
  * The scan is over the window, which is short by construction; the history
  * itself is bounded by the caller. There is no clock here — `now` is passed in,
@@ -96,21 +103,46 @@ export function evaluateCombinations(
   const hits: CombinationHit[] = [];
   for (const { rule, matchers } of policy.combinations) {
     const since = now - rule.window;
-    const used = new Set<number>();
+    // For each glob, the history indexes it accepts, earliest first.
+    const candidates = matchers.map((matcher) => {
+      const accepted: number[] = [];
+      history.forEach((mark, index) => {
+        if (mark.at >= since && matcher.test(toolKey(mark.serverName, mark.toolName))) {
+          accepted.push(index);
+        }
+      });
+      return accepted;
+    });
+    // `owner[i]` is the glob currently holding history index `i`.
+    const owner = new Map<number, number>();
+    const assign = (glob: number, tried: Set<number>): boolean => {
+      for (const index of candidates[glob] ?? []) {
+        if (tried.has(index)) continue;
+        tried.add(index);
+        const holder = owner.get(index);
+        if (holder === undefined || assign(holder, tried)) {
+          owner.set(index, glob);
+          return true;
+        }
+      }
+      return false;
+    };
+    let complete = true;
+    for (let glob = 0; glob < matchers.length; glob++) {
+      if (!assign(glob, new Set())) {
+        complete = false;
+        break;
+      }
+    }
+    if (!complete) continue;
     const evidence: CallMark[] = [];
-    for (const matcher of matchers) {
-      const index = history.findIndex(
-        (mark, i) =>
-          !used.has(i) && mark.at >= since && matcher.test(toolKey(mark.serverName, mark.toolName)),
-      );
-      if (index === -1) break;
-      used.add(index);
-      const mark = history[index];
-      if (mark !== undefined) evidence.push(mark);
+    for (let glob = 0; glob < matchers.length; glob++) {
+      for (const [index, holder] of owner) {
+        const mark = history[index];
+        if (holder === glob && mark !== undefined) evidence.push(mark);
+      }
     }
-    if (evidence.length === matchers.length) {
-      hits.push({ id: rule.id, action: rule.action, note: rule.note, evidence });
-    }
+    hits.push({ id: rule.id, action: rule.action, note: rule.note, evidence });
   }
   return hits;
 }

@@ -10,7 +10,7 @@
  * JSON-RPC stream.
  */
 import { compilePolicy, escapeUnsafeJson } from '@mcpguard/core';
-import { eraOf, listAllTools, wrapStdioServer } from '@mcpguard/proxy';
+import { eraOf, listAllTools, type WrapHandle, wrapStdioServer } from '@mcpguard/proxy';
 import { AuditWriter } from '../audit-writer.js';
 import { loadPolicy, resolveAgainst } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';
@@ -100,21 +100,18 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
         })
       : NULL_TELEMETRY;
 
-  // The downstream server only exists once the proxy is connected, and the
-  // `clientInfo` rung of the identity ladder reads from it, so it is reached
-  // through a late-bound reference. A call that arrives before it is set sees no
+  // The bridge exists only once the client's first message has named an era, and
+  // the identity ladder and the manifest gate read from it, so it is reached
+  // through the running wrap. A call that arrives before it is set sees no
   // identity, which fails towards the policy's default, never towards a role.
-  let downstream: DownstreamView | undefined;
+  let wrap: WrapHandle | undefined;
   const clientName = (): string | undefined => {
+    const downstream: DownstreamView | undefined = wrap?.current()?.server;
     const negotiated = downstream?.getNegotiatedProtocolVersion();
     // ADR-010: the modern era has no `initialize`, so there is no rung to read.
     if (negotiated === undefined || eraOf(negotiated) === 'modern') return undefined;
     return downstream?.getClientVersion()?.name;
   };
-
-  // Like `downstream`, the upstream client exists only once the proxy is up. The
-  // manifest gate uses it to check a pinned manifest before a first call.
-  let upstream: Parameters<typeof listAllTools>[0] | undefined;
 
   const gates = buildGates({
     policy: loaded.policy,
@@ -135,6 +132,7 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
       ? fileLockStore(resolveAgainst(loaded.dir, loaded.policy.lock.path))
       : undefined,
     fetchTools: async () => {
+      const upstream = wrap?.current()?.client;
       if (upstream === undefined) throw new Error('the upstream is not connected yet');
       return listAllTools(upstream);
     },
@@ -147,7 +145,7 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
   });
 
   try {
-    const handle = await wrapStdioServer({
+    wrap = await wrapStdioServer({
       command: parsed.command,
       args: parsed.args,
       clientName: 'mcpguard',
@@ -157,11 +155,9 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
           `[mcpguard] ${JSON.stringify({ event: 'error', message: error.message })}\n`,
         ),
     });
-    downstream = handle.bridge.server;
-    upstream = handle.bridge.client;
-    // Runs until the transport closes (the child exits or stdin ends).
-    await waitForClose(handle.bridge.server);
-    await handle.close();
+    // Runs until the transport closes (the client goes away or stdin ends).
+    await wrap.closed;
+    await wrap.close();
     return EXIT.ok;
   } catch (error) {
     throw new CliError(`wrap failed: ${messageOf(error)}`, {
@@ -175,17 +171,6 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
 interface DownstreamView {
   getClientVersion(): { name: string } | undefined;
   getNegotiatedProtocolVersion(): string | undefined;
-}
-
-/** Resolves when the downstream server transport closes. */
-function waitForClose(server: { onclose?: (() => void) | undefined }): Promise<void> {
-  return new Promise((resolve) => {
-    const prior = server.onclose;
-    server.onclose = () => {
-      prior?.();
-      resolve();
-    };
-  });
 }
 
 /** A best-effort OTLP/HTTP JSON poster. A failed post is reported, never thrown. */

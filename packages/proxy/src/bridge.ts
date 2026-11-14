@@ -16,6 +16,7 @@ import type { Client } from '@modelcontextprotocol/client';
 import {
   type CallToolRequest,
   type CallToolResult,
+  CLIENT_CAPABILITIES_META_KEY,
   type Implementation,
   isCallToolResult,
   type JSONRPCRequest,
@@ -91,8 +92,23 @@ export function createBridge(options: BridgeOptions): Bridge {
   };
 
   const forward = async (method: string, params: unknown, ctx: ServerContext): Promise<Result> => {
+    // The modern era has no `initialize` to carry what the client can do: every
+    // request names it on its own `_meta` envelope, which the downstream server
+    // lifts off before a handler sees the request. The upstream client builds an
+    // envelope of its own, from what was declared when it connected; a `_meta`
+    // key set here wins over it, so the capabilities of *this* request are the
+    // ones the upstream server is told.
+    const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+    const declared = envelope?.[CLIENT_CAPABILITIES_META_KEY];
+    const carried = params as { _meta?: Record<string, unknown> } | undefined;
+    const withEnvelope =
+      declared === undefined
+        ? params
+        : { ...carried, _meta: { ...carried?._meta, [CLIENT_CAPABILITIES_META_KEY]: declared } };
     const request =
-      params === undefined ? { method } : { method, params: params as Record<string, unknown> };
+      withEnvelope === undefined
+        ? { method }
+        : { method, params: withEnvelope as Record<string, unknown> };
     return client.request(request, PASSTHROUGH_RESULT, { signal: ctx.mcpReq.signal });
   };
 

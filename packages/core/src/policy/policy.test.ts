@@ -269,6 +269,74 @@ describe('evaluateCombinations', () => {
   });
 });
 
+describe('evaluateCombinations with overlapping globs', () => {
+  const rule = (allOf: string[]) =>
+    compilePolicy(
+      parsePolicy({
+        version: 1,
+        combinations: [
+          { id: 'overlap', all_of: allOf, window: '10m', note: 'overlapping members' },
+        ],
+      }),
+    );
+  const call = (toolName: string, at: number) => ({ serverName: 'echo', toolName, at });
+
+  // Each case is a rule that is satisfiable by *some* assignment of distinct
+  // calls to globs, and is fed in both orders: a greedy first-match pairing
+  // finds it in only one of them.
+  it('finds the pairing when the broad glob is written first', () => {
+    const p = rule(['echo__*', 'echo__send*']);
+    for (const history of [
+      [call('read_file', 1), call('send_http', 2)],
+      [call('send_http', 1), call('read_file', 2)],
+    ]) {
+      const hits = evaluateCombinations(p, history, 3);
+      expect(hits).toHaveLength(1);
+      // One call per glob, in the order the globs were written.
+      expect(hits[0]?.evidence.map((mark) => mark.toolName)).toEqual(['read_file', 'send_http']);
+    }
+  });
+
+  it('finds the pairing when the broad glob is written last', () => {
+    const p = rule(['echo__read*', 'echo__*']);
+    for (const history of [
+      [call('read_file', 1), call('send_http', 2)],
+      [call('send_http', 1), call('read_file', 2)],
+    ]) {
+      const hits = evaluateCombinations(p, history, 3);
+      expect(hits).toHaveLength(1);
+      expect(hits[0]?.evidence.map((mark) => mark.toolName)).toEqual(['read_file', 'send_http']);
+    }
+  });
+
+  it('solves a chain of three overlapping globs', () => {
+    // `ab` is the only call `echo__ab*` accepts, `a` or `ab` fit `echo__a*`, and
+    // anything fits `echo__*`: first-fit hands the broad glob `ab` and strands the rest.
+    const p = rule(['echo__*', 'echo__a*', 'echo__ab*']);
+    const history = [call('ab', 1), call('a', 2), call('z', 3)];
+    const hits = evaluateCombinations(p, history, 4);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence.map((mark) => mark.toolName)).toEqual(['z', 'a', 'ab']);
+  });
+
+  it('still refuses when no assignment of distinct calls exists', () => {
+    const p = rule(['echo__*', 'echo__a*', 'echo__ab*']);
+    // Two calls cannot fill three members, and `z` matches only the broad glob.
+    expect(evaluateCombinations(p, [call('ab', 1), call('z', 2)], 3)).toEqual([]);
+    expect(evaluateCombinations(p, [call('z', 1), call('y', 2), call('x', 3)], 4)).toEqual([]);
+  });
+
+  it('keeps the first matching call as evidence when nothing overlaps', () => {
+    const p = rule(['echo__read*', 'echo__send*']);
+    const hits = evaluateCombinations(
+      p,
+      [call('read_a', 1), call('read_b', 2), call('send_a', 3), call('send_b', 4)],
+      5,
+    );
+    expect(hits[0]?.evidence.map((mark) => mark.toolName)).toEqual(['read_a', 'send_a']);
+  });
+});
+
 describe('compilePolicy', () => {
   it('lays a per-tool scan override over the defaults without erasing them', () => {
     const policy = compilePolicy(
