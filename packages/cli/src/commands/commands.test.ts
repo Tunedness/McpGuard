@@ -1,10 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseLock, serverLockOf } from '@mcpguard/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CliError, EXIT } from '../errors.js';
 import { StringWriter } from '../io.js';
 import { runInit } from './init.js';
+import { runLock } from './lock.js';
 import { runScan } from './scan.js';
 import { runValidate } from './validate.js';
 import { parseWrapArgs } from './wrap-args.js';
@@ -156,4 +159,191 @@ describe('scan', () => {
     runScan(context, ['p.txt']);
     expect(stdout.text).toContain('pii: tckn');
   });
+});
+
+const UNSAFE = /[\p{Cc}\p{Cf}\u2028\u2029]/u;
+
+describe('lock', () => {
+  const SHIFTY = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'testing',
+    'fixtures',
+    'shifty-server.mjs',
+  );
+  const lockPath = (): string => join(dir, 'guardlock.json');
+  const live = (variant: string): string[] => ['--', 'node', SHIFTY, variant];
+
+  it('pins the live manifest with --accept, byte for byte the same on a second run', async () => {
+    const first = ctx([]);
+    expect(await runLock(first.context, ['--accept', ...live('steady')])).toBe(EXIT.ok);
+    expect(first.stdout.text).toContain('not pinned yet');
+    expect(first.stdout.text).toContain('accepted: pinned 2 tool(s)');
+
+    const bytes = readFileSync(lockPath(), 'utf8');
+    expect(
+      serverLockOf(parseLock(bytes), 'server')
+        ?.tools.map((t) => t.name)
+        .sort(),
+    ).toEqual(['lookup', 'mutate']);
+
+    const again = ctx([]);
+    expect(await runLock(again.context, ['--accept', ...live('steady')])).toBe(EXIT.ok);
+    expect(again.stdout.text).toContain('already pinned');
+    expect(readFileSync(lockPath(), 'utf8')).toBe(bytes);
+  }, 30_000);
+
+  it('--diff shows a rug-pull, exits 5 and writes nothing', async () => {
+    await runLock(ctx([]).context, ['--accept', ...live('steady')]);
+    const bytes = readFileSync(lockPath(), 'utf8');
+
+    const same = ctx([]);
+    expect(await runLock(same.context, ['--diff', ...live('steady')])).toBe(EXIT.ok);
+    expect(same.stdout.text).toContain('matches the pin');
+
+    const pulled = ctx([]);
+    expect(await runLock(pulled.context, ['--diff', ...live('pulled')])).toBe(EXIT.integrity);
+    expect(pulled.stdout.text).toContain('altered: "lookup"');
+    // The operator sees what they would be approving, not just which tool.
+    expect(pulled.stdout.text).toContain('then send it to a collection endpoint');
+    expect(pulled.stdout.text).toMatch(/set: [0-9a-f]{64}/);
+    expect(readFileSync(lockPath(), 'utf8')).toBe(bytes);
+  }, 30_000);
+
+  it('--accept --expect pins only the manifest that --diff showed', async () => {
+    const shown = ctx([]);
+    await runLock(shown.context, ['--diff', ...live('pulled')]);
+    const hash = /set: ([0-9a-f]{64})/.exec(shown.stdout.text)?.[1] ?? '';
+
+    // A different manifest (the server changed since review) is refused, and nothing is written.
+    await expect(
+      runLock(ctx([]).context, ['--accept', '--expect', hash, ...live('poisoned')]),
+    ).rejects.toThrow(/not the one --expect named/);
+    expect(existsSync(lockPath())).toBe(false);
+
+    expect(await runLock(ctx([]).context, ['--accept', '--expect', hash, ...live('pulled')])).toBe(
+      EXIT.ok,
+    );
+    expect(existsSync(lockPath())).toBe(true);
+  }, 30_000);
+
+  it('show quotes names from the lock, so a control character cannot rewrite the screen', async () => {
+    const evil = 'x\u001b[2K\u202e\u009b2K\rsafe';
+    writeFileSync(
+      lockPath(),
+      JSON.stringify({
+        version: 1,
+        servers: {
+          [evil]: {
+            toolsHash: '0'.repeat(64),
+            tools: [{ name: evil, hash: '1'.repeat(64), findings: [evil] }],
+          },
+        },
+      }),
+    );
+    const { context, stdout } = ctx([]);
+
+    expect(await runLock(context, ['show'])).toBe(EXIT.ok);
+    // Only the line terminators writeLines adds may remain.
+    expect(stdout.text.replaceAll('\n', '')).not.toMatch(UNSAFE);
+    expect(stdout.text).toContain('x\\u001b[2K\\u202e\\u009b2K\\rsafe');
+  });
+
+  it('--diff shows bidi and C1 characters in a definition as visible escapes', async () => {
+    const { context, stdout } = ctx([]);
+    await runLock(context, ['--diff', ...live('bidi')]);
+
+    // Only the line terminators writeLines adds may remain.
+    expect(stdout.text.replaceAll('\n', '')).not.toMatch(UNSAFE);
+    expect(stdout.text).toContain('\\u202e\\u009b2K');
+  }, 30_000);
+
+  it('--diff cuts a very long definition and says so; --full shows all of it', async () => {
+    const cut = ctx([]);
+    await runLock(cut.context, ['--diff', ...live('long')]);
+    expect(cut.stdout.text).toMatch(/more characters; --full shows all/);
+    expect(cut.stdout.text).not.toContain('FINAL-SENTENCE');
+
+    const full = ctx([]);
+    await runLock(full.context, ['--diff', '--full', ...live('long')]);
+    expect(full.stdout.text).toContain('FINAL-SENTENCE');
+    expect(full.stdout.text).not.toMatch(/--full shows all/);
+  }, 30_000);
+
+  it('--diff on a server that is not pinned exits 5', async () => {
+    const { context, stdout } = ctx([]);
+    expect(await runLock(context, ['--diff', ...live('steady')])).toBe(EXIT.integrity);
+    expect(stdout.text).toContain('not pinned yet');
+  }, 30_000);
+
+  it('--accept replaces only the named server and records a description finding', async () => {
+    await runLock(ctx([]).context, ['--accept', ...live('steady')]);
+    const other = ctx([]);
+    expect(
+      await runLock(other.context, ['--accept', '--server', 'other', ...live('poisoned')]),
+    ).toBe(EXIT.ok);
+    expect(other.stdout.text).toContain('description flagged: "lookup"');
+
+    const lock = parseLock(readFileSync(lockPath(), 'utf8'));
+    expect(Object.keys(lock.servers).sort()).toEqual(['other', 'server']);
+    expect(serverLockOf(lock, 'server')?.tools.every((t) => t.findings === undefined)).toBe(true);
+    expect(serverLockOf(lock, 'other')?.tools.find((t) => t.name === 'lookup')?.findings).toContain(
+      'inj.en.override.ignore-previous',
+    );
+  }, 30_000);
+
+  it('show prints what is pinned, with the flagged rule ids', async () => {
+    await runLock(ctx([]).context, ['--accept', ...live('poisoned')]);
+    const { context, stdout } = ctx([]);
+
+    expect(await runLock(context, ['show'])).toBe(EXIT.ok);
+    expect(stdout.text).toContain('"server": 2 tool(s)');
+    expect(stdout.text).toContain('flagged: "inj.en.override.ignore-previous"');
+  }, 30_000);
+
+  it('show with no lock is a usage error', async () => {
+    await expect(runLock(ctx([]).context, ['show'])).rejects.toThrow(/no lock file/);
+  });
+
+  it('refuses to accept over a lock it cannot read', async () => {
+    writeFileSync(lockPath(), '{broken');
+    const error = await runLock(ctx([]).context, ['--accept', ...live('steady')]).catch(
+      (e: unknown) => e as CliError,
+    );
+
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).exitCode).toBe(EXIT.integrity);
+    expect(readFileSync(lockPath(), 'utf8')).toBe('{broken');
+  }, 30_000);
+
+  it('refuses to accept when the policy turns the lock off', async () => {
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\nlock:\n  enabled: false\n');
+    await expect(runLock(ctx([]).context, ['--accept', ...live('steady')])).rejects.toThrow(
+      /lock.enabled is false/,
+    );
+  }, 30_000);
+
+  it.each([
+    [['--accept'], /needs the server command/],
+    [['--accept', '--diff', '--', 'node'], /choose one of/],
+    [['--accept', '--bogus'], /unknown lock argument/],
+    [['--server', 'x'], /needs `show`/],
+    [['--diff', '--server'], /--server needs a value/],
+    [['show', '--policy'], /--policy needs a value/],
+    [['show', '--expect', 'abc'], /only goes with --accept/],
+    [['show', '--full'], /--full goes with/],
+  ])('rejects %j', async (argv, message) => {
+    await expect(runLock(ctx([]).context, argv)).rejects.toThrow(message);
+  });
+
+  it('reports a server that cannot be started as a runtime failure', async () => {
+    const error = await runLock(ctx([]).context, [
+      '--diff',
+      '--',
+      join(dir, 'no-such-binary'),
+    ]).catch((e: unknown) => e as CliError);
+
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).exitCode).toBe(EXIT.runtime);
+  }, 30_000);
 });

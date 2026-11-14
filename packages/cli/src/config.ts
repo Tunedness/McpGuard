@@ -29,6 +29,11 @@ export interface LoadedPolicy {
   readonly path: string | undefined;
 }
 
+/** Resolves a path from a policy file against that file's directory; an absolute one stays. */
+export function resolveAgainst(dir: string, path: string): string {
+  return isAbsolute(path) ? path : join(dir, path);
+}
+
 /** The default policy, for a run with no file. */
 export function defaultLoadedPolicy(cwd: string): LoadedPolicy {
   return { policy: parsePolicy({ version: 1 }), dir: cwd, path: undefined };

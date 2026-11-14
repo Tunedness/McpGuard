@@ -21,13 +21,18 @@ HMAC'i, korelasyon anahtarı (`pii.correlation_key_env`) maskeye bağlı, kimlik
 merdiveni (`--identity` / `MCPGUARD_IDENTITY` / `clientInfo.name`) erişim
 kararında ve kayıtta, `checkpoint_to: syslog` açılışta hata. Test sayısı 627.
 
+**Manifest kapısı (Faz 15) bağlandı.** `tools/list` artık `guardlock.json` ile
+karşılaştırılıyor: ilk temasta pinleme (TOFU), sonra `on_mismatch: halt|flag`,
+`on_first_use: require`, araç açıklamalarının taranıp bulguların kilide yazılması
+ve `mcpguard lock --diff|--accept`. Rug-pull koruması artık anlatıldığı gibi
+çalışıyor; ayrıntı aşağıdaki Faz 15 bölümünde.
+
 Sıradaki iş:
 
 1. **Yayın adı/scope kararı** — kullanıcının. Karar verilmeden publish yok;
    ardından `release.yml` publish adımı ve `*_VERSION` sabitleri (şu an `0.0.0`)
    güncellenir.
-2. **P1 manifest bağlama** (küçük): `guardList` gate'i `diffServer`'a bağlanır,
-   `on_first_use`/`on_mismatch` uygulanır, `guardlock.json` CLI'da okunup yazılır.
+2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
 3. Diğer P1'ler: korumalı `serve` gateway, sağlık verisi tanıyıcıları, Kademe 2
    SLM hakem, checkpoint syslog sink'i, trace context yayımı.
 
@@ -758,3 +763,88 @@ hash'i kaydın tuttuğu gövdeyi hash'lediği için alanı taşımayan v0.1.0 ka
 okur (downstream `Server` bağlantıdan sonra var olur); bağlanmadan gelen bir
 çağrı kimliksiz sayılır, yani politikanın varsayılanına düşer, bir role
 yükselmez. `serve` (Faz 18) kimlik çözümünü ayrıca yapacak (ADR-011).
+
+
+---
+
+## Faz 15 — manifest kapısı (bitti)
+
+Rug-pull koruması (ADR-005) proxy'ye bağlandı. Çekirdek `diffServer`/`hashTool`
+olduğu gibi kullanıldı; yeni bir hash algoritması yok.
+
+```
+packages/cli/src/manifest-gate.ts     tools/list kapısı: karar mantığı
+packages/cli/src/lock-file.ts         guardlock.json okuma, atomik yazma, yol çözümü
+packages/cli/src/runtime.ts           onList kapıya bağlı; toolScanner; olay/kayıt çıkışı
+packages/cli/src/commands/lock.ts     show | --diff | --accept
+packages/core/src/lock/manifest.ts    parseLock · serializeLock · toToolDefinition · withServerLock
+packages/proxy/src/list-tools.ts      listStdioTools (lock komutu için tek seferlik tools/list)
+packages/cli/src/testing/fixtures/shifty-server.mjs   manifest'i değişen test sunucusu
+```
+
+**Davranış.**
+- **İlk temas** (`on_first_use: write`): kilit ya da bu sunucunun girdisi yoksa
+  manifest pinlenir (geçici dosya + `rename`, sıralı anahtarlar, 2 boşluk
+  girinti, sonda `\n`), liste geçer. `require`: trafik durur, hiçbir şey
+  yazılmaz. `on_mismatch: flag` `require`'ı yumuşatmaz.
+- **Sonraki oturumlar:** `diffServer` farkı varsa `halt` (varsayılan) `tools/list`'i
+  hata ile reddeder; `flag` geçirir, olayı yayar ve kayda düşer. Diff stderr'e
+  JSON satırı olarak (`manifest_mismatch`: `altered`/`added`/`removed`),
+  `security_event` olarak OTLP'ye ve `tool_list` türünde audit kaydına gider.
+  İstemciye dönen hata mesajı araç adı/açıklaması taşımaz: onlar sunucunun
+  sözleri.
+- **Oturum içi değişiklik:** `notifications/tools/list_changed` olduğu gibi geçiyor; kapı her
+  `tools/list` isteğinde çalıştığı için bir sonraki liste yeniden karşılaştırılır.
+  Kilit her seferinde diskten okunur, yani `lock --accept` çalışan bir oturumda da
+  görülür.
+- **Hash kapsamı:** `name`, `description`, `inputSchema`, `annotations` ve —
+  varsa — üst düzey `title` ile `outputSchema`. İkisi yalnız varsa hash'e girer;
+  hiçbiri olmayan bir aracın hash'i değişmedi.
+- **Açıklama taraması:** başlık, açıklama, annotation string'leri ve iki şemadaki
+  `description`/`title` metinleri `tool_description` türüyle taranır. Eşik aşılırsa
+  `injection_detected` olayı + `tool_list` kaydı çıkar ve kural kimlikleri kilitte
+  `tools[].findings` olarak durur. **Bulgu işaretlenir, araç listeden çıkarılmaz**
+  (PRD Faz 0 eki "bulgular kilide yazılır" diyor). `findings` hash'e girmez.
+- **Sayfalı `tools/list`:** bir sayfa katalogun tamamı sayılmaz; `removed` yalnız
+  son sayfada, ilk sayfa görüldüyse hesaplanır; TOFU yazımı son sayfada olur.
+- **Kapının açık bırakmaması:** liste reddedilince `tools/call` de reddedilir
+  (sonraki geçen liste kapıyı açar). `require` + girdi yokken liste hiç istenmese
+  bile çağrı reddedilir. Pin varken ve oturumda henüz doğrulanmış liste yokken
+  ilk `tools/call`'dan önce kapı upstream'den kendisi `tools/list` çeker ve aynı
+  karşılaştırmayı yapar (önbellekli kataloğa güvenen istemci kapıyı atlayamaz);
+  upstream'e ulaşılamazsa o çağrı `unverified` ile reddedilir, kalıcı halt
+  sayılmaz. Sınır: oturum ortasında gelen `list_changed` bildirimi bu "doğrulandı"
+  durumunu sıfırlamaz; değişen manifest bir sonraki `tools/list`'te yakalanır.
+- **Kilit okunamıyorsa** (bozuk JSON, yanlış şekil) `unreadable`: `halt`/`flag`
+  politikasına tabidir ve ilk-temas yazımı asla üzerine yazmaz. Yazım başarısız
+  olursa (`write_failed`) liste reddedilir; pinlenmemiş çalışmak sessiz bir
+  koruma eksikliği olurdu. Adsız ya da tekrarlı araç adı `malformed` sayılır.
+
+**`lock` komutu.** `mcpguard lock show`, `lock --diff -- <cmd>` (farkı gösterir,
+fark ya da pin yoksa çıkış 5, hiçbir şey yazmaz), `lock --accept -- <cmd>`
+(açık onay: mevcut manifest'i yazar, yalnız adı verilen sunucunun girdisini
+değiştirir; zaten aynıysa dosyaya dokunmaz). Sunucu komutu `--`'den sonra gelir
+çünkü taşıma politikada değil CLI argümanı; `--server` kilitteki adı verir
+(`wrap --name` ile aynı, varsayılan `server`). `--diff` değişen/eklenen araçların
+şu anki tanımını (tek satır, JSON-kotalı, 4000 karakterle sınırlı) ve manifest'in
+`set:` hash'ini basar; `--accept --expect <set-hash>` yalnız incelenen manifest'i
+pinler, arada değişmişse reddeder. `--full` 4000 karakter sınırını kaldırır (sınır
+kesildiğini ve `--full`'u söyler). `show` ve `--diff` sunucudan gelen adları ve
+tanımları `quote`/`escapeUnsafeJson` (core `util/display.ts`) ile basar: JSON-kotalı
+ve ek olarak C1, bidi/format (RLO, izolatlar, sıfır genişlik) ve satır/paragraf
+ayırıcıları görünür `\uXXXX` kaçışına çevrilir (`JSON.stringify` yalnız C0'ı
+kaçırır). Aynı kaçış `wrap`'in stderr olay satırlarına ve `parseLock` hata
+mesajlarına da uygulanır.
+
+**Devralan kişiye.**
+- **Gözlem modu (`mode: flag`) kilidi yumuşatmaz.** `on_mismatch` operatörün
+  açık kararı; varsayılanı `halt`. Gözlemde kalıp farkı yalnız görmek isteyen
+  `on_mismatch: flag` yazar. Bu, `scan` aksiyonlarının gözlemde `flag`'e
+  düşmesinden bilinçle farklı.
+- Birden çok `wrap` süreci aynı `guardlock.json`'a farklı sunucu adıyla ilk-temas
+  yazarsa okuma-değiştirme-yazma yarışı olabilir (rename atomik, ama son yazan
+  kazanır). Aynı dosyayı paylaşan eşzamanlı ilk temas için `lock --accept` önerilir.
+- Faz dosyasının listesinde olmayan ama kapsam gereği dokunulanlar:
+  `packages/proxy/src/{list-tools,index,boundary.test}.ts` (CLI'ya MCP istemci
+  bağımlılığı eklememek için tek seferlik liste çağrısı proxy'de) ve yeni
+  `manifest-gate.ts`/`lock-file.ts`.

@@ -14,8 +14,10 @@ import type {
   SecurityEvent,
   SecurityEventKind,
   TelemetrySink,
+  ToolDefinition,
 } from '@mcpguard/core';
 import type { CompiledRuleset, ScanOptions } from '@mcpguard/detect';
+import { scanContent } from '@mcpguard/detect';
 import {
   blockedResult,
   extractText,
@@ -25,6 +27,13 @@ import {
   guardResource,
   guardResult,
 } from '@mcpguard/proxy';
+import type { LockStore } from './lock-file.js';
+import {
+  createManifestGate,
+  describedText,
+  type ManifestEvent,
+  type ToolScan,
+} from './manifest-gate.js';
 
 /** What the host injects to build the gates. */
 export interface RuntimeDeps {
@@ -43,6 +52,13 @@ export interface RuntimeDeps {
   readonly correlationKey?: string | undefined;
   /** The chained audit writer, or undefined when auditing is off. */
   readonly audit: AuditRecorder | undefined;
+  /**
+   * Where `guardlock.json` lives. Absent, or `policy.lock.enabled` false, means
+   * the `tools/list` gate lets everything through (what v0.1.0 did).
+   */
+  readonly lock?: LockStore | undefined;
+  /** Asks the upstream for its whole tool list, for the manifest check before a first call. */
+  readonly fetchTools?: (() => Promise<readonly unknown[]>) | undefined;
   readonly clock: () => number;
   /** Reports a security event to stderr diagnostics. */
   readonly onEvent: (event: string, detail: Record<string, unknown>) => void;
@@ -99,6 +115,45 @@ export function resolveIdentity(inputs: IdentityInputs): IdentityResolution {
   }
   return { identity: undefined, source: 'none', exact: false };
 }
+
+/**
+ * Scans a tool's description, annotations and schema text with the policy's
+ * scan settings for that tool. Shared by the `tools/list` gate and `lock`, so
+ * the findings pinned to the lock are the ones the gate would have raised.
+ */
+export function toolScanner(
+  deps: Pick<RuntimeDeps, 'policy' | 'compiledPolicy' | 'ruleset' | 'serverName'>,
+): (tool: ToolDefinition) => ToolScan {
+  return (tool) => {
+    const text = describedText(tool);
+    if (text === '') return { ruleIds: [], score: 0, action: 'allow' };
+    // PII masking is for what the model is shown; here only the rules matter,
+    // and the description is forwarded exactly as the server sent it.
+    const options: ScanOptions = {
+      ...scanOptionsFor(deps.policy, deps.compiledPolicy, deps.serverName, tool.name),
+      pii: undefined,
+    };
+    const verdict = scanContent(
+      {
+        id: 'tool_description',
+        text,
+        kind: 'tool_description',
+        channel: `${deps.serverName}__${tool.name}`,
+      },
+      deps.ruleset,
+      options,
+    );
+    return {
+      ruleIds: verdict.findings.map((finding) => finding.ruleId),
+      score: verdict.score,
+      action: verdict.action,
+    };
+  };
+}
+
+/** How many tool names a manifest event lists, and how long each may be. */
+const MAX_DIFF_NAMES = 100;
+const MAX_DIFF_NAME_LENGTH = 200;
 
 /** The longest `clientInfo.name` accepted as an identity. */
 export const MAX_CLIENT_NAME_LENGTH = 128;
@@ -175,7 +230,7 @@ export function buildGates(deps: RuntimeDeps): Gates {
   });
 
   const record = (
-    kind: 'tool_call' | 'resource_read',
+    kind: 'tool_call' | 'resource_read' | 'tool_list',
     toolName: string | undefined,
     action: string,
     score: number | undefined,
@@ -207,9 +262,137 @@ export function buildGates(deps: RuntimeDeps): Gates {
     );
   };
 
+  const scanTool = toolScanner(deps);
+
+  const reportManifest = (event: ManifestEvent): void => {
+    const caller = deps.resolveIdentity();
+    switch (event.kind) {
+      case 'pinned':
+        deps.onEvent('manifest_pinned', {
+          server: deps.serverName,
+          tools: event.toolCount,
+          lock: deps.lock?.path,
+        });
+        record(
+          'tool_list',
+          undefined,
+          'allow',
+          undefined,
+          [],
+          [],
+          `pinned ${event.toolCount}`,
+          '',
+          caller,
+        );
+        return;
+      case 'description_flagged':
+        deps.onEvent('injection_detected', {
+          surface: 'tool_description',
+          tool: event.tool,
+          action: 'flag',
+          score: event.score,
+          rules: event.ruleIds,
+        });
+        emit(
+          'injection_detected',
+          'security_event',
+          event.tool,
+          'flag',
+          event.score,
+          event.ruleIds,
+          caller,
+        );
+        record('tool_list', event.tool, 'flag', event.score, event.ruleIds, [], '', '', caller);
+        return;
+      case 'mismatch': {
+        const diff = event.diff;
+        const evidence = [
+          `manifest.${event.reason}`,
+          ...(diff !== undefined && diff.altered.length > 0 ? ['manifest.altered'] : []),
+          ...(diff !== undefined && diff.added.length > 0 ? ['manifest.added'] : []),
+          ...(diff !== undefined && diff.removed.length > 0 ? ['manifest.removed'] : []),
+        ];
+        // The names are the server's words: JSON-encoded here, never interpolated
+        // into a line a terminal or a log viewer will interpret.
+        const names = (list: readonly string[] | undefined): string[] | undefined =>
+          list?.slice(0, MAX_DIFF_NAMES).map((name) => name.slice(0, MAX_DIFF_NAME_LENGTH));
+        const detail = {
+          server: deps.serverName,
+          action: event.action,
+          reason: event.reason,
+          altered: names(diff?.altered),
+          added: names(diff?.added),
+          removed: names(diff?.removed),
+          detail: event.detail,
+          lock: deps.lock?.path,
+        };
+        deps.onEvent('manifest_mismatch', detail);
+        emit(
+          'manifest_mismatch',
+          'security_event',
+          undefined,
+          event.action,
+          undefined,
+          evidence,
+          caller,
+        );
+        record(
+          'tool_list',
+          undefined,
+          event.action === 'halt' ? 'block' : 'flag',
+          undefined,
+          evidence,
+          [],
+          JSON.stringify({ altered: detail.altered, added: detail.added, removed: detail.removed }),
+          '',
+          caller,
+        );
+        return;
+      }
+    }
+  };
+
+  const manifest =
+    deps.lock !== undefined && deps.policy.lock.enabled
+      ? createManifestGate({
+          serverName: deps.serverName,
+          onFirstUse: deps.policy.lock.on_first_use,
+          onMismatch: deps.policy.lock.on_mismatch,
+          store: deps.lock,
+          scanTool,
+          report: reportManifest,
+          fetchTools: deps.fetchTools,
+        })
+      : undefined;
+
   return {
     onCall: async (request, forward) => {
       const toolName = String(request.params?.name ?? 'unknown');
+      // A list the gate refused leaves no open door: the call is refused too,
+      // until a later `tools/list` passes. Not downgraded in observe mode, for
+      // the same reason the list is not: `lock.on_mismatch` is the operator's
+      // explicit word on what a changed manifest means.
+      const refused = await manifest?.callGuard();
+      if (refused !== undefined) {
+        const caller = deps.resolveIdentity();
+        deps.onEvent('manifest_call_refused', {
+          server: deps.serverName,
+          tool: toolName,
+          reason: refused.reason,
+        });
+        record(
+          'tool_call',
+          toolName,
+          'deny',
+          undefined,
+          [`manifest.${refused.reason}`],
+          [],
+          '',
+          '',
+          caller,
+        );
+        throw refused;
+      }
       // The caller's identity, not the session id: a ULID is minted per
       // connection and no role mapping can ever name it (ADR-010).
       const caller = deps.resolveIdentity();
@@ -280,7 +463,8 @@ export function buildGates(deps: RuntimeDeps): Gates {
       }
       return guarded.result as never;
     },
-    onList: async (_request, forward) => forward(),
+    onList: async (request, forward) =>
+      manifest !== undefined ? manifest.onList(request, forward) : forward(),
     onRead: async (request, forward) => {
       const uri = String(request.params?.uri ?? 'unknown');
       const caller = deps.resolveIdentity();

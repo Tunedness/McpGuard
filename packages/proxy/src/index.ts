@@ -22,6 +22,8 @@ export {
 } from './era.js';
 export type { GuardContext, GuardedResult } from './guard.js';
 export { blockedResult, guardCall, guardResource, guardResult } from './guard.js';
+export type { ListToolsOptions } from './list-tools.js';
+export { listAllTools, listStdioTools } from './list-tools.js';
 export {
   BAGGAGE_META_KEY,
   baggageEntry,

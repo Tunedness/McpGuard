@@ -9,12 +9,13 @@
  * proxy. Everything it writes goes to stderr; stdout belongs to the agent's
  * JSON-RPC stream.
  */
-import { compilePolicy } from '@mcpguard/core';
-import { eraOf, wrapStdioServer } from '@mcpguard/proxy';
+import { compilePolicy, escapeUnsafeJson } from '@mcpguard/core';
+import { eraOf, listAllTools, wrapStdioServer } from '@mcpguard/proxy';
 import { AuditWriter } from '../audit-writer.js';
-import { loadPolicy } from '../config.js';
+import { loadPolicy, resolveAgainst } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
+import { fileLockStore } from '../lock-file.js';
 import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
 import { buildGates, resolveIdentity } from '../runtime.js';
@@ -74,7 +75,7 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
 
   const audit = loaded.policy.audit.enabled
     ? new AuditWriter({
-        path: resolveAuditPath(loaded.dir, loaded.policy.audit.path),
+        path: resolveAgainst(loaded.dir, loaded.policy.audit.path),
         auditKey:
           loaded.policy.audit.key_env !== undefined
             ? context.env[loaded.policy.audit.key_env]
@@ -111,6 +112,10 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
     return downstream?.getClientVersion()?.name;
   };
 
+  // Like `downstream`, the upstream client exists only once the proxy is up. The
+  // manifest gate uses it to check a pinned manifest before a first call.
+  let upstream: Parameters<typeof listAllTools>[0] | undefined;
+
   const gates = buildGates({
     policy: loaded.policy,
     compiledPolicy: compiled,
@@ -126,11 +131,18 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
       }),
     correlationKey: readKey(context.env, loaded.policy.pii.correlation_key_env),
     audit,
+    lock: loaded.policy.lock.enabled
+      ? fileLockStore(resolveAgainst(loaded.dir, loaded.policy.lock.path))
+      : undefined,
+    fetchTools: async () => {
+      if (upstream === undefined) throw new Error('the upstream is not connected yet');
+      return listAllTools(upstream);
+    },
     clock: () => Date.now(),
     telemetry,
     onEvent: (event, detail) =>
       context.stderr.write(
-        `[mcpguard] ${JSON.stringify({ event, session: sessionId, ...detail })}\n`,
+        `[mcpguard] ${escapeUnsafeJson(JSON.stringify({ event, session: sessionId, ...detail }))}\n`,
       ),
   });
 
@@ -146,6 +158,7 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
         ),
     });
     downstream = handle.bridge.server;
+    upstream = handle.bridge.client;
     // Runs until the transport closes (the child exits or stdin ends).
     await waitForClose(handle.bridge.server);
     await handle.close();
@@ -162,10 +175,6 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
 interface DownstreamView {
   getClientVersion(): { name: string } | undefined;
   getNegotiatedProtocolVersion(): string | undefined;
-}
-
-function resolveAuditPath(dir: string, path: string): string {
-  return path.startsWith('/') ? path : `${dir}/${path}`;
 }
 
 /** Resolves when the downstream server transport closes. */

@@ -29,6 +29,7 @@ const ENGINE_FREE = [
   'diagnostics.ts',
   'stdio-wrap.ts',
   'content.ts',
+  'list-tools.ts',
 ];
 /** The files that are allowed to import an engine — the exact set. */
 const ENGINE_AWARE = ['guard.ts'];

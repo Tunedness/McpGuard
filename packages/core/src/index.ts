@@ -45,7 +45,18 @@ export type {
   ToolDefinition,
   ToolLock,
 } from './lock/index.js';
-export { diffServer, emptyLock, hashTool, lockServer } from './lock/index.js';
+export {
+  diffServer,
+  emptyLock,
+  hashTool,
+  LockFormatError,
+  lockServer,
+  parseLock,
+  serializeLock,
+  serverLockOf,
+  toToolDefinition,
+  withServerLock,
+} from './lock/index.js';
 export type {
   AccessEvaluation,
   CallMark,
@@ -86,6 +97,7 @@ export type {
   Ports,
   TelemetrySink,
 } from './ports/index.js';
+export { escapeUnsafeJson, quote } from './util/display.js';
 export { digestsEqual, hmacSha256, sha256 } from './util/hash.js';
 export type { JsonValue } from './util/json.js';
 export { stableStringify, toJsonValue } from './util/json.js';
