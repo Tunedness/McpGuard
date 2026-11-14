@@ -187,6 +187,14 @@ const PiiSchema = z
      * key. Off by default: linkability is a trade the tenant opts into.
      */
     correlation_tags: z.boolean().default(false),
+    /**
+     * Environment variable holding the key that correlation tags are keyed with.
+     *
+     * Required when `correlation_tags` is on: a tag without a key is either no
+     * tag or an unkeyed one, and an unkeyed truncated hash is exactly the lookup
+     * key the tag is built not to be. The key itself never sits in the policy.
+     */
+    correlation_key_env: z.string().min(1).optional(),
   })
   .prefault({});
 

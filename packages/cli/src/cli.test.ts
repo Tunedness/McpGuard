@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { run, usage } from './cli.js';
 import { EXIT } from './errors.js';
 import { versionBanner } from './index.js';
@@ -74,5 +77,98 @@ describe('run', () => {
 
     await expect(run(ctx)).resolves.toBe(EXIT.ok);
     expect(stdout.text).toContain('policy is valid');
+  });
+});
+
+describe('run: a policy this build cannot honour stops at startup', () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  function inDir(policy: string, argv: readonly string[], env: Record<string, string> = {}) {
+    dir = mkdtempSync(join(tmpdir(), 'mcpguard-run-'));
+    writeFileSync(join(dir, 'guardpolicy.yaml'), policy);
+    const stdout = new StringWriter();
+    const stderr = new StringWriter();
+    return { ctx: { argv, stdout, stderr, env, cwd: dir }, stderr };
+  }
+
+  it('exits non-zero from validate for checkpoint_to: syslog', async () => {
+    const { ctx, stderr } = inDir('version: 1\naudit:\n  checkpoint_to: syslog\n', ['validate']);
+
+    await expect(run(ctx)).resolves.toBe(EXIT.policy);
+    expect(stderr.text).toContain('syslog is not supported yet');
+  });
+
+  it('exits non-zero from wrap for checkpoint_to: syslog, before spawning anything', async () => {
+    const { ctx, stderr } = inDir('version: 1\naudit:\n  checkpoint_to: syslog\n', [
+      'wrap',
+      '--',
+      'node',
+      '-e',
+      '0',
+    ]);
+
+    await expect(run(ctx)).resolves.toBe(EXIT.policy);
+    expect(stderr.text).toContain('syslog is not supported yet');
+  });
+
+  it('exits non-zero from validate and wrap for correlation_tags without a key', async () => {
+    const policy = 'version: 1\npii:\n  correlation_tags: true\n  correlation_key_env: TAG_KEY\n';
+    const validate = inDir(policy, ['validate']);
+    await expect(run(validate.ctx)).resolves.toBe(EXIT.policy);
+
+    const wrap = inDir(policy, ['wrap', '--', 'node', '-e', '0']);
+    await expect(run(wrap.ctx)).resolves.toBe(EXIT.policy);
+    expect(wrap.stderr.text).toContain('$TAG_KEY');
+  });
+
+  it('refuses an empty MCPGUARD_IDENTITY rather than falling to clientInfo', async () => {
+    for (const value of ['', '  ']) {
+      const { ctx, stderr } = inDir('version: 1\n', ['wrap', '--', 'node', '-e', '0'], {
+        MCPGUARD_IDENTITY: value,
+      });
+
+      await expect(run(ctx)).resolves.toBe(EXIT.usage);
+      expect(stderr.text).toContain('MCPGUARD_IDENTITY is set but empty');
+    }
+  });
+
+  it('does not stop on an empty MCPGUARD_IDENTITY when --identity is given', async () => {
+    // The env rung is never read once the flag answers, so the stray export is
+    // harmless. The start then fails on the server command, not on the env.
+    const { ctx, stderr } = inDir(
+      'version: 1\n',
+      ['wrap', '--identity', 'alice', '--', 'mcpguard-no-such-command'],
+      { MCPGUARD_IDENTITY: '' },
+    );
+
+    await expect(run(ctx)).resolves.not.toBe(EXIT.usage);
+    expect(stderr.text).not.toContain('MCPGUARD_IDENTITY is set but empty');
+  });
+
+  it('refuses --identity followed by another flag, not taking the flag as the name', async () => {
+    const { ctx, stderr } = inDir('version: 1\n', [
+      'wrap',
+      '--identity',
+      '--name',
+      'echo',
+      '--',
+      'node',
+      '-e',
+      '0',
+    ]);
+
+    await expect(run(ctx)).resolves.toBe(EXIT.usage);
+    expect(stderr.text).toContain('--identity needs a value');
+  });
+
+  it('refuses --identity with no value rather than falling to a heuristic', async () => {
+    const { ctx, stderr } = inDir('version: 1\n', ['wrap', '--identity', '--', 'node', '-e', '0']);
+
+    await expect(run(ctx)).resolves.toBe(EXIT.usage);
+    expect(stderr.text).toContain('--identity needs a value');
   });
 });

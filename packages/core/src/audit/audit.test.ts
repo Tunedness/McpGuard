@@ -55,6 +55,47 @@ describe('buildRecord', () => {
   });
 });
 
+describe('caller identity on a record', () => {
+  const identity = { identity: 'alice', source: 'flag', exact: true } as const;
+
+  it('is part of the hashed body, so altering it breaks the chain', () => {
+    const record = buildRecord(
+      0,
+      GENESIS_HASH,
+      { ...fields(0), callerIdentity: identity },
+      'raw',
+      'k',
+    );
+    expect(verifyChain([record]).ok).toBe(true);
+
+    const forged = { ...record, callerIdentity: { ...identity, exact: false } };
+    expect(verifyChain([forged]).ok).toBe(false);
+  });
+
+  it('leaves a record written before the ladder existed verifiable', () => {
+    // No callerIdentity key at all: what every v0.1.0 log holds.
+    const legacy = buildRecord(0, GENESIS_HASH, fields(0), 'raw', 'k');
+    expect('callerIdentity' in legacy).toBe(false);
+
+    const next = buildRecord(
+      1,
+      legacy.hash,
+      { ...fields(1), callerIdentity: identity },
+      'raw',
+      'k',
+    );
+    expect(verifyChain([legacy, next]).ok).toBe(true);
+  });
+
+  it('survives a JSON round trip, as the log is read back from disk', () => {
+    const none = { identity: undefined, source: 'none', exact: false } as const;
+    const record = buildRecord(0, GENESIS_HASH, { ...fields(0), callerIdentity: none }, 'raw', 'k');
+    const read = JSON.parse(JSON.stringify(record)) as AuditRecord;
+
+    expect(verifyChain([read]).ok).toBe(true);
+  });
+});
+
 describe('verifyChain', () => {
   it('accepts an intact chain', () => {
     expect(verifyChain(chain(5)).ok).toBe(true);

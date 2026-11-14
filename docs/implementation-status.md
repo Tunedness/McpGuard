@@ -15,6 +15,12 @@ korpusta %100 recall / %0 FP, in-sample), PII maskeleme, erişim denetimi,
 manifest sabitleme, hash zincirli audit, opsiyonel OTLP telemetri. Son kayıtlı
 test sayısı 595 (Faz 9).
 
+**P1 doğruluk düzeltmeleri (Faz 14) bitti.** v0.1.0'da anlatılıp çalışmayan
+dört davranış artık çalışıyor ve testle kilitli: audit parmak izi ham metnin
+HMAC'i, korelasyon anahtarı (`pii.correlation_key_env`) maskeye bağlı, kimlik
+merdiveni (`--identity` / `MCPGUARD_IDENTITY` / `clientInfo.name`) erişim
+kararında ve kayıtta, `checkpoint_to: syslog` açılışta hata. Test sayısı 627.
+
 Sıradaki iş:
 
 1. **Yayın adı/scope kararı** — kullanıcının. Karar verilmeden publish yok;
@@ -713,3 +719,42 @@ opsiyonel OTLP telemetri. Komutlar: `wrap`, `scan`, `validate`, `init`,
 - `git add` yalnız kendi yollarını açıkça stage'ler, asla `git add -A`.
 - Kod, yorumlar, commit mesajları ve README **İngilizce**; bu dosya ve `.ssot`
   **Türkçe**.
+
+---
+
+## Faz 14 — doğruluk düzeltmeleri (bitti)
+
+v0.1.0'ın anlattığı ama yapmadığı dört şey. Her biri bir regresyon testiyle
+kilitli; testler `packages/cli/src/runtime.test.ts`,
+`packages/cli/src/commands/wrap-identity.test.ts` (gerçek pipe, derlenmiş
+binary), `commands.test.ts`, `cli.test.ts` ve `audit.test.ts` içinde.
+
+- **Audit HMAC'i.** `runtime.ts` parmak izini `totalBytes` listesinden alıyordu;
+  şimdi upstream sonucunun maskelenmemiş metin blokları (`extractText`, `\n` ile
+  birleşik) HMAC girdisi. `onCall` ve `onRead` aynı yolu kullanır. Ham metin
+  kayda yazılmaz (ADR-004). `deny` kaydında upstream yok, girdi boş.
+- **Korelasyon anahtarı.** Şemaya `pii.correlation_key_env` eklendi
+  (`schema:generate` ile üretildi). `wrap` anahtarı env'den okur ve
+  `scanOptionsFor`'a geçirir; `detect` tarafına dokunulmadı.
+- **Kimlik merdiveni (ADR-010).** `wrap --identity`, `MCPGUARD_IDENTITY`,
+  legacy era'da `clientInfo.name`. Modern era'da son basamak yok:
+  `getNegotiatedProtocolVersion()` + `eraOf` ile elenir. `guardCall` artık
+  oturum ULID'ini değil çözülmüş kimliği alır (ULID hiçbir rol eşlemesine
+  uymaz). Çözüm `{ identity, source, exact }` olarak audit kaydında
+  (`callerIdentity`) ve `security_event`/`policy_decision` olaylarında
+  (`tunedness.identity*` attribute'ları). `source` değerleri ADR-010'daki gibi
+  `flag | env | client_info | none` (faz dosyasındaki `clientInfo` yazımı
+  ADR'ye uyduruldu). `--identity` değersiz verilirse hata: sezgisele düşmez.
+- **Açılış kontrolleri.** `packages/cli/src/preflight.ts` (`validate` ve `wrap`
+  ortak): `correlation_tags` açık ve anahtar yok/boş → `EXIT.policy`;
+  `checkpoint_to: syslog` → "henüz desteklenmiyor (P1, Faz 23)", `EXIT.policy`.
+  Gerçek syslog sink'i Faz 23'te.
+
+**Geriye uyumluluk.** `callerIdentity` kayıtta isteğe bağlı bir alan; zincir
+hash'i kaydın tuttuğu gövdeyi hash'lediği için alanı taşımayan v0.1.0 kayıtları
+`audit verify`'dan geçmeye devam eder (testle kilitli).
+
+**Devralan kişiye.** `wrap` kimliği gate'lere geç bağlanan bir referansla
+okur (downstream `Server` bağlantıdan sonra var olur); bağlanmadan gelen bir
+çağrı kimliksiz sayılır, yani politikanın varsayılanına düşer, bir role
+yükselmez. `serve` (Faz 18) kimlik çözümünü ayrıca yapacak (ADR-011).

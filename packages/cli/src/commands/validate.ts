@@ -9,6 +9,7 @@ import { compilePolicy } from '@mcpguard/core';
 import { loadPolicy } from '../config.js';
 import { EXIT } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
+import { assertPolicyRunnable } from '../preflight.js';
 
 /** The `validate` help text. */
 export function validateHelp(): string[] {
@@ -31,6 +32,9 @@ export function runValidate(context: CliContext, argv: readonly string[]): numbe
   // Compiling is the second half of validation: a policy that parses can still
   // carry a glob that does not compile.
   compilePolicy(loaded.policy);
+  // The other half: a policy that compiles can still ask for a key that is not
+  // there or a sink that does not exist yet.
+  assertPolicyRunnable(loaded.policy, context.env);
   const p = loaded.policy;
 
   writeLines(context.stdout, [

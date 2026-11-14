@@ -2,11 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EXIT } from '../errors.js';
+import { CliError, EXIT } from '../errors.js';
 import { StringWriter } from '../io.js';
 import { runInit } from './init.js';
 import { runScan } from './scan.js';
 import { runValidate } from './validate.js';
+import { parseWrapArgs } from './wrap-args.js';
 
 /**
  * The offline commands, run against a temp directory. These are what an operator
@@ -16,10 +17,10 @@ import { runValidate } from './validate.js';
 
 let dir: string;
 
-function ctx(argv: readonly string[]) {
+function ctx(argv: readonly string[], env: Record<string, string | undefined> = {}) {
   const stdout = new StringWriter();
   const stderr = new StringWriter();
-  return { context: { argv: ['x', ...argv], stdout, stderr, env: {}, cwd: dir }, stdout, stderr };
+  return { context: { argv: ['x', ...argv], stdout, stderr, env, cwd: dir }, stdout, stderr };
 }
 
 beforeEach(() => {
@@ -62,6 +63,75 @@ describe('validate', () => {
     writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\nmod: enforce\n');
     const { context } = ctx([]);
     expect(() => runValidate(context, [])).toThrow(/not valid/);
+  });
+});
+
+describe('validate: a policy that asks for what this build cannot deliver', () => {
+  const failure = (run: () => unknown): CliError => {
+    try {
+      run();
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      return error as CliError;
+    }
+    throw new Error('expected validate to throw');
+  };
+
+  it('refuses checkpoint_to: syslog, which has no sink yet', () => {
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\naudit:\n  checkpoint_to: syslog\n');
+    const error = failure(() => runValidate(ctx([]).context, []));
+
+    expect(error.exitCode).toBe(EXIT.policy);
+    expect(error.message).toMatch(/syslog is not supported yet/);
+  });
+
+  it('refuses correlation_tags with no correlation_key_env', () => {
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\npii:\n  correlation_tags: true\n');
+    const error = failure(() => runValidate(ctx([]).context, []));
+
+    expect(error.exitCode).toBe(EXIT.policy);
+    expect(error.message).toMatch(/correlation_key_env/);
+  });
+
+  it('refuses correlation_tags when the named variable is unset or empty', () => {
+    writeFileSync(
+      join(dir, 'guardpolicy.yaml'),
+      'version: 1\npii:\n  correlation_tags: true\n  correlation_key_env: TAG_KEY\n',
+    );
+    for (const env of [{}, { TAG_KEY: '' }]) {
+      const error = failure(() => runValidate(ctx([], env).context, []));
+      expect(error.exitCode).toBe(EXIT.policy);
+      expect(error.message).toMatch(/\$TAG_KEY/);
+    }
+  });
+
+  it('accepts correlation_tags once the key is in the environment', () => {
+    writeFileSync(
+      join(dir, 'guardpolicy.yaml'),
+      'version: 1\npii:\n  correlation_tags: true\n  correlation_key_env: TAG_KEY\n',
+    );
+    const { context, stdout } = ctx([], { TAG_KEY: 'secret' });
+
+    expect(runValidate(context, [])).toBe(EXIT.ok);
+    expect(stdout.text).toContain('policy is valid');
+  });
+});
+
+describe('wrap flags', () => {
+  it('reads --identity before the --, and leaves the child its own flags', () => {
+    const parsed = parseWrapArgs(['--identity', 'alice', '--', 'node', 's.mjs', '--identity', 'x']);
+
+    expect(parsed.identity).toBe('alice');
+    expect(parsed.command).toBe('node');
+    expect(parsed.args).toEqual(['s.mjs', '--identity', 'x']);
+  });
+
+  it('reports an empty identity when the next token is a flag', () => {
+    expect(parseWrapArgs(['--identity', '--name', 'echo', '--', 'node']).identity).toBe('');
+  });
+
+  it('has no identity when the flag is absent', () => {
+    expect(parseWrapArgs(['--', 'node']).identity).toBeUndefined();
   });
 });
 

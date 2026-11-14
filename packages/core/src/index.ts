@@ -31,7 +31,13 @@ export {
   serializeRecord,
   verifyChain,
 } from './audit/index.js';
-export type { EventType, SecurityEvent, SecurityEventKind } from './domain/events.js';
+export type {
+  EventType,
+  IdentityResolution,
+  IdentitySource,
+  SecurityEvent,
+  SecurityEventKind,
+} from './domain/events.js';
 export type {
   GuardLock,
   ManifestDiff,

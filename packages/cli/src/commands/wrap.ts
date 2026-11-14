@@ -2,20 +2,22 @@
  * `mcpguard wrap -- <server-cmd>`: guard one stdio MCP server.
  *
  * One wrapped child is one connection is one session, identified by a ULID
- * minted here — the exact, heuristic-free identity the wrap story is told
- * through (ADR-006). This command loads the policy and the ruleset, builds the
+ * minted here — the exact, heuristic-free session id the records are tied
+ * together by (ADR-006). The caller's identity is a separate thing, resolved
+ * through the ADR-010 ladder. This command loads the policy and the ruleset, builds the
  * gates, mints the session, opens the audit writer, and hands the lot to the
  * proxy. Everything it writes goes to stderr; stdout belongs to the agent's
  * JSON-RPC stream.
  */
 import { compilePolicy } from '@mcpguard/core';
-import { wrapStdioServer } from '@mcpguard/proxy';
+import { eraOf, wrapStdioServer } from '@mcpguard/proxy';
 import { AuditWriter } from '../audit-writer.js';
 import { loadPolicy } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
+import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
-import { buildGates } from '../runtime.js';
+import { buildGates, resolveIdentity } from '../runtime.js';
 import { NULL_TELEMETRY, OtlpTelemetrySink } from '../telemetry/sink.js';
 import { ulid } from '../ulid.js';
 import { parseWrapArgs } from './wrap-args.js';
@@ -28,6 +30,7 @@ export function wrapHelp(): string[] {
     'Options:',
     '  --policy <path>   Policy file (default: search up from cwd)',
     '  --name <name>     Name the wrapped server goes by in rules and the log',
+    '  --identity <name> Who the caller is, for role mapping (or set MCPGUARD_IDENTITY)',
     '  --help            Show this help',
   ];
 }
@@ -45,7 +48,25 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
     });
   }
 
+  if (parsed.identity !== undefined && parsed.identity.trim() === '') {
+    throw new CliError('--identity needs a value', {
+      hints: ['example: mcpguard wrap --identity alice -- node server.mjs'],
+    });
+  }
+
+  // An identity the operator tried to set and left empty is a mistake to stop
+  // on, not a reason to fall through to the rung the client controls. When
+  // `--identity` is given the env rung is never read, so a stray empty export
+  // is harmless and does not stop the start.
+  const envIdentity = context.env.MCPGUARD_IDENTITY;
+  if (parsed.identity === undefined && envIdentity !== undefined && envIdentity.trim() === '') {
+    throw new CliError('MCPGUARD_IDENTITY is set but empty', {
+      hints: ['give it a value, or unset it to resolve the identity from clientInfo'],
+    });
+  }
+
   const loaded = loadPolicy(context.cwd, context.env, parsed.policy);
+  assertPolicyRunnable(loaded.policy, context.env);
   const ruleset = loadShippedRuleset();
   const serverName = parsed.name ?? 'server';
   const sessionId = ulid();
@@ -78,6 +99,18 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
         })
       : NULL_TELEMETRY;
 
+  // The downstream server only exists once the proxy is connected, and the
+  // `clientInfo` rung of the identity ladder reads from it, so it is reached
+  // through a late-bound reference. A call that arrives before it is set sees no
+  // identity, which fails towards the policy's default, never towards a role.
+  let downstream: DownstreamView | undefined;
+  const clientName = (): string | undefined => {
+    const negotiated = downstream?.getNegotiatedProtocolVersion();
+    // ADR-010: the modern era has no `initialize`, so there is no rung to read.
+    if (negotiated === undefined || eraOf(negotiated) === 'modern') return undefined;
+    return downstream?.getClientVersion()?.name;
+  };
+
   const gates = buildGates({
     policy: loaded.policy,
     compiledPolicy: compiled,
@@ -85,6 +118,13 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
     serverName,
     sessionId,
     sessionExact: true,
+    resolveIdentity: () =>
+      resolveIdentity({
+        flag: parsed.identity,
+        env: context.env.MCPGUARD_IDENTITY,
+        clientName: clientName(),
+      }),
+    correlationKey: readKey(context.env, loaded.policy.pii.correlation_key_env),
     audit,
     clock: () => Date.now(),
     telemetry,
@@ -105,6 +145,7 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
           `[mcpguard] ${JSON.stringify({ event: 'error', message: error.message })}\n`,
         ),
     });
+    downstream = handle.bridge.server;
     // Runs until the transport closes (the child exits or stdin ends).
     await waitForClose(handle.bridge.server);
     await handle.close();
@@ -115,6 +156,12 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
       cause: error,
     });
   }
+}
+
+/** The slice of the downstream `Server` the identity ladder reads. */
+interface DownstreamView {
+  getClientVersion(): { name: string } | undefined;
+  getNegotiatedProtocolVersion(): string | undefined;
 }
 
 function resolveAuditPath(dir: string, path: string): string {

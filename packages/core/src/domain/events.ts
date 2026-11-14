@@ -21,6 +21,24 @@ export type SecurityEventKind =
   | 'scan_degraded'
   | 'audit_checkpoint';
 
+/** Which rung of the identity ladder answered (ADR-010). */
+export type IdentitySource = 'flag' | 'env' | 'client_info' | 'none';
+
+/**
+ * Who the caller was taken to be, and how sure the answer is (ADR-010).
+ *
+ * `flag` and `env` are exact: the person who set the proxy up supplied the
+ * value. `client_info` is a heuristic: a client names itself however it likes.
+ * `none` means nothing answered, so no roles are granted.
+ */
+export interface IdentityResolution {
+  readonly identity: string | undefined;
+  readonly source: IdentitySource;
+  readonly exact: boolean;
+  /** Why a rung that spoke was not used, e.g. `client_info_rejected`. */
+  readonly note?: string | undefined;
+}
+
 /** One emitted event. Attribute encoding is the sink's business, not the engine's. */
 export interface SecurityEvent {
   readonly type: EventType;
@@ -36,4 +54,6 @@ export interface SecurityEvent {
   readonly action: string;
   /** Rule or recogniser ids, for correlation. Never content. */
   readonly evidence: readonly string[];
+  /** The resolved caller identity, when the event is about a call (ADR-010). */
+  readonly callerIdentity?: IdentityResolution | undefined;
 }

@@ -45,6 +45,36 @@ describe('toLogRecord', () => {
   });
 });
 
+describe('toLogRecord caller identity', () => {
+  const attrsOf = (over: Partial<SecurityEvent>) =>
+    toLogRecord(event(over), 'mcpguard').attributes as {
+      key: string;
+      value: Record<string, unknown>;
+    }[];
+
+  it('carries the resolution and the rejection note, so none is told from rejected', () => {
+    const rejected = attrsOf({
+      callerIdentity: {
+        identity: undefined,
+        source: 'none',
+        exact: false,
+        note: 'client_info_rejected',
+      },
+    });
+    expect(rejected.find((a) => a.key === 'tunedness.identity_source')?.value).toEqual({
+      stringValue: 'none',
+    });
+    expect(rejected.find((a) => a.key === 'tunedness.identity_note')?.value).toEqual({
+      stringValue: 'client_info_rejected',
+    });
+
+    const plain = attrsOf({
+      callerIdentity: { identity: undefined, source: 'none', exact: false },
+    });
+    expect(plain.some((a) => a.key === 'tunedness.identity_note')).toBe(false);
+  });
+});
+
 describe('toLogsPayload', () => {
   it('wraps records in the OTLP resourceLogs envelope', () => {
     const payload = toLogsPayload([toLogRecord(event(), 'mcpguard')], 'mcpguard') as {

@@ -37,6 +37,10 @@ export function toLogRecord(event: SecurityEvent, service: string): Record<strin
     attr('tunedness.action', event.action),
     attr('tunedness.score', event.score),
     attr('tunedness.evidence', event.evidence.join(',')),
+    attr('tunedness.identity', event.callerIdentity?.identity),
+    attr('tunedness.identity_source', event.callerIdentity?.source),
+    attr('tunedness.identity_exact', event.callerIdentity?.exact.toString()),
+    attr('tunedness.identity_note', event.callerIdentity?.note),
     attr('service.name', service),
   ].filter((a): a is OtlpAttribute => a !== undefined);
 

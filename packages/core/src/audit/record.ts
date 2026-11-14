@@ -12,6 +12,7 @@
  * amendment. Integrity and de-duplication still work; brute-forcing the value
  * back does not.
  */
+import type { IdentityResolution } from '../domain/events.js';
 import { hmacSha256, sha256 } from '../util/hash.js';
 import { stableStringify, toJsonValue } from '../util/json.js';
 
@@ -37,6 +38,12 @@ export interface AuditFields {
   readonly maskedContent: string;
   /** Whether the session id was resolved exactly or inferred (ADR-006). */
   readonly sessionExact: boolean;
+  /**
+   * Who the caller was taken to be and which rung of the ADR-010 ladder said
+   * so. Optional: records written before the ladder existed carry none, and
+   * still verify, because the chain hashes whatever the record holds.
+   */
+  readonly callerIdentity?: IdentityResolution | undefined;
 }
 
 /** A complete, chained record. */

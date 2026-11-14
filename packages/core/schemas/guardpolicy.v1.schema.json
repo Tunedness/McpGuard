@@ -313,6 +313,10 @@
         "correlation_tags": {
           "default": false,
           "type": "boolean"
+        },
+        "correlation_key_env": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "additionalProperties": false
