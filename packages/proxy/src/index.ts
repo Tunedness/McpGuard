@@ -1,5 +1,5 @@
 /**
- * `@mcpguard/proxy` — the MCP adapter.
+ * `@tunedness/mcpguard-proxy` — the MCP adapter.
  *
  * Three gates and one blind seam. `bridge.ts`, `era.ts`, `remap.ts` and
  * `diagnostics.ts` are kept free of both engine packages so the transport

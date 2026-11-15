@@ -50,7 +50,9 @@ export class RulesetValidationError extends Error {
 /** A ruleset built for an engine this one cannot promise to match. */
 export class RulesetEngineError extends Error {
   constructor(range: string) {
-    super(`the ruleset targets engine ${range}, but this is @mcpguard/detect ${DETECT_VERSION}`);
+    super(
+      `the ruleset targets engine ${range}, but this is @tunedness/mcpguard-detect ${DETECT_VERSION}`,
+    );
     this.name = 'RulesetEngineError';
   }
 }

@@ -1,4 +1,4 @@
-import type { SecurityEvent } from '@mcpguard/core';
+import type { SecurityEvent } from '@tunedness/mcpguard-core';
 import { describe, expect, it } from 'vitest';
 import { toLogRecord, toLogsPayload } from './otlp.js';
 import { NULL_TELEMETRY, OtlpTelemetrySink } from './sink.js';

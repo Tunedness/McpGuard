@@ -9,7 +9,12 @@
  */
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { type AuditFields, buildRecord, GENESIS_HASH, serializeRecord } from '@mcpguard/core';
+import {
+  type AuditFields,
+  buildRecord,
+  GENESIS_HASH,
+  serializeRecord,
+} from '@tunedness/mcpguard-core';
 import type { AuditRecorder } from './runtime.js';
 
 /** Where a checkpoint is published. */

@@ -104,7 +104,7 @@ export const LexiconSchema = z.strictObject({
 export const RulesetSchema = z.strictObject({
   schemaVersion: z.literal(1),
   rulesetVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
-  /** Semver range of `@mcpguard/detect` this ruleset targets. */
+  /** Semver range of `@tunedness/mcpguard-detect` this ruleset targets. */
   engineRange: z.string().min(1),
   locales: z.array(z.enum(['und', 'en', 'tr'])).min(1),
   rules: z.array(RuleSchema).min(1).max(5000),

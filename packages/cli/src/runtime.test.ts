@@ -5,7 +5,7 @@ import {
   parsePolicy,
   type SecurityEvent,
   verifyChain,
-} from '@mcpguard/core';
+} from '@tunedness/mcpguard-core';
 import { describe, expect, it } from 'vitest';
 import { AuditWriter } from './audit-writer.js';
 import type { LockState, LockStore } from './lock-file.js';

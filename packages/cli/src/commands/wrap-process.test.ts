@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseLock, verifyChain } from '@mcpguard/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { parseLock, verifyChain } from '@tunedness/mcpguard-core';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 /**

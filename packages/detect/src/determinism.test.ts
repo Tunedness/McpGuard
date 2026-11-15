@@ -13,7 +13,7 @@ import type { ContentItem, ScanOptions } from './types.js';
 const ruleset = loadRuleset({
   schemaVersion: 1,
   rulesetVersion: '1.0.0',
-  engineRange: '^0.0.0',
+  engineRange: '^0.1.0',
   locales: ['en', 'tr'],
   rules: [
     {

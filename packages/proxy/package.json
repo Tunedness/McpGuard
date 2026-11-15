@@ -1,8 +1,17 @@
 {
-  "name": "@mcpguard/proxy",
-  "version": "0.0.0",
+  "name": "@tunedness/mcpguard-proxy",
+  "version": "0.1.1",
   "description": "The McpGuard MCP adapter: a server/client pair that guards tools/call, tools/list and resources/read, and forwards everything else untouched.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tunedness/McpGuard.git",
+    "directory": "packages/proxy"
+  },
+  "homepage": "https://github.com/Tunedness/McpGuard#readme",
+  "bugs": {
+    "url": "https://github.com/Tunedness/McpGuard/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20.19"
@@ -26,8 +35,8 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@mcpguard/core": "*",
-    "@mcpguard/detect": "*",
+    "@tunedness/mcpguard-core": "^0.1.1",
+    "@tunedness/mcpguard-detect": "^0.1.1",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/core": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0"

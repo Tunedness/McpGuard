@@ -7,8 +7,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import { compilePolicy } from '@mcpguard/core';
-import { scanContent } from '@mcpguard/detect';
+import { compilePolicy } from '@tunedness/mcpguard-core';
+import { scanContent } from '@tunedness/mcpguard-detect';
 import { loadPolicy } from '../config.js';
 import { CliError, EXIT } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';

@@ -26,13 +26,13 @@ const SPECIFIER_RE =
 
 const FORBIDDEN_PACKAGES = [
   '@modelcontextprotocol/',
-  '@mcpguard/core',
+  '@tunedness/mcpguard-core',
   // The ruleset is *data* this package validates and compiles. Importing the
   // package that ships it would make the engine depend on one particular
   // version of the rules, which is the coupling ADR-003 exists to avoid.
-  '@mcpguard/ruleset',
-  '@mcpguard/proxy',
-  'mcpguard',
+  '@tunedness/mcpguard-ruleset',
+  '@tunedness/mcpguard-proxy',
+  '@tunedness/mcpguard',
 ];
 
 const FORBIDDEN_BUILTINS = [
@@ -99,7 +99,7 @@ const FILES = sourceFiles().map((path) => ({
   code: stripComments(readFileSync(path, 'utf8')),
 }));
 
-describe('@mcpguard/detect purity', () => {
+describe('@tunedness/mcpguard-detect purity', () => {
   it('has source files to check, so an empty walk cannot pass silently', () => {
     expect(FILES.length).toBeGreaterThan(4);
   });

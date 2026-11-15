@@ -6,7 +6,7 @@
  * the records a human can read, masked content and all.
  */
 import { readFileSync } from 'node:fs';
-import { type AuditRecord, verifyChain } from '@mcpguard/core';
+import { type AuditRecord, verifyChain } from '@tunedness/mcpguard-core';
 import { loadPolicy } from '../config.js';
 import { CliError, EXIT } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';

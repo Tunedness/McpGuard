@@ -6,7 +6,7 @@
  * does not exist yet. Dropping either silently would be a security control that
  * reads as applied and is not, so `validate` and `wrap` both refuse up front.
  */
-import type { GuardPolicy } from '@mcpguard/core';
+import type { GuardPolicy } from '@tunedness/mcpguard-core';
 import { CliError, EXIT } from './errors.js';
 
 /** The environment a key is read from. */

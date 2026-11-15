@@ -18,9 +18,9 @@ import {
   type TelemetrySink,
   type ToolDefinition,
   toolKey,
-} from '@mcpguard/core';
-import type { CompiledRuleset, ScanOptions } from '@mcpguard/detect';
-import { scanContent } from '@mcpguard/detect';
+} from '@tunedness/mcpguard-core';
+import type { CompiledRuleset, ScanOptions } from '@tunedness/mcpguard-detect';
+import { scanContent } from '@tunedness/mcpguard-detect';
 import {
   blockedResult,
   extractText,
@@ -29,7 +29,7 @@ import {
   guardCall,
   guardResource,
   guardResult,
-} from '@mcpguard/proxy';
+} from '@tunedness/mcpguard-proxy';
 import type { LockStore } from './lock-file.js';
 import {
   createManifestGate,

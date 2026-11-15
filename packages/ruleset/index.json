@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "rulesetVersion": "0.1.0",
-  "engineRange": "^0.0.0",
+  "engineRange": "^0.1.0",
   "locales": ["und", "en", "tr"],
   "files": {
     "rules": "rulesets/injection.v1.json",

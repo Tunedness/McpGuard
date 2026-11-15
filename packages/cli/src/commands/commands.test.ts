@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseLock, serverLockOf } from '@mcpguard/core';
+import { parseLock, serverLockOf } from '@tunedness/mcpguard-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CliError, EXIT } from '../errors.js';
 import { StringWriter } from '../io.js';

@@ -1,5 +1,5 @@
 /**
- * `@mcpguard/detect` — the tier-1 detection engine.
+ * `@tunedness/mcpguard-detect` — the tier-1 detection engine.
  *
  * Deterministic by construction, and that word is load-bearing here rather than
  * decorative: the score path is integer arithmetic, the ruleset is data with a
@@ -7,7 +7,7 @@
  * produces the same verdict, byte for byte (ADR-009). A committed verdict
  * snapshot is what proves it.
  *
- * The package is pure for the same reason `@mcpguard/core` is, and is separate
+ * The package is pure for the same reason `@tunedness/mcpguard-core` is, and is separate
  * from it because ADR-002 says the hot path must be able to move to a native
  * module without dragging the rest of the engine along.
  */

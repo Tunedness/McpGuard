@@ -1,4 +1,4 @@
-import { EMPTY_RULESET } from '@mcpguard/detect';
+import { EMPTY_RULESET } from '@tunedness/mcpguard-detect';
 import { describe, expect, it } from 'vitest';
 import { generateCorpus } from './corpus.js';
 import { optionsAt, replay } from './replay.js';

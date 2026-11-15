@@ -124,11 +124,11 @@ one collector sees one story.
 
 | Package | Published as | Role |
 | --- | --- | --- |
-| `packages/core` | `@mcpguard/core` | Pure decision engine: policy, access control, manifest pinning, the audit chain. |
-| `packages/detect` | `@mcpguard/detect` | Pure tier-1 detection engine: injection detectors, PII recognisers, scoring, strip. |
-| `packages/ruleset` | `@mcpguard/ruleset` | The rules, as data, versioned on their own cadence. No dependencies. |
-| `packages/proxy` | `@mcpguard/proxy` | The MCP adapter: the `Server`/`Client` pair and the three guarded methods. |
-| `packages/cli` | `mcpguard` | The command line and the host. What `npx` will download. |
+| `packages/core` | `@tunedness/mcpguard-core` | Pure decision engine: policy, access control, manifest pinning, the audit chain. |
+| `packages/detect` | `@tunedness/mcpguard-detect` | Pure tier-1 detection engine: injection detectors, PII recognisers, scoring, strip. |
+| `packages/ruleset` | `@tunedness/mcpguard-ruleset` | The rules, as data, versioned on their own cadence. No dependencies. |
+| `packages/proxy` | `@tunedness/mcpguard-proxy` | The MCP adapter: the `Server`/`Client` pair and the three guarded methods. |
+| `packages/cli` | `@tunedness/mcpguard` (bin `mcpguard`) | The command line and the host. What `npx` will download. |
 | `bench` | *never published* | The labelled corpus, the detection harness, the latency harness. |
 
 ## Development

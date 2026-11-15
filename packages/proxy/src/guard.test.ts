@@ -1,5 +1,5 @@
-import { compilePolicy, parsePolicy } from '@mcpguard/core';
-import { loadRuleset } from '@mcpguard/detect';
+import { compilePolicy, parsePolicy } from '@tunedness/mcpguard-core';
+import { loadRuleset } from '@tunedness/mcpguard-detect';
 import { describe, expect, it } from 'vitest';
 import type { ResultLike } from './content.js';
 import {
@@ -19,7 +19,7 @@ import {
 const ruleset = loadRuleset({
   schemaVersion: 1,
   rulesetVersion: '1.0.0',
-  engineRange: '^0.0.0',
+  engineRange: '^0.1.0',
   locales: ['en'],
   rules: [
     {

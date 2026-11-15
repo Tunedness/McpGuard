@@ -9,8 +9,8 @@
  * proxy. Everything it writes goes to stderr; stdout belongs to the agent's
  * JSON-RPC stream.
  */
-import { compilePolicy, escapeUnsafeJson } from '@mcpguard/core';
-import { eraOf, listAllTools, type WrapHandle, wrapStdioServer } from '@mcpguard/proxy';
+import { compilePolicy, escapeUnsafeJson } from '@tunedness/mcpguard-core';
+import { eraOf, listAllTools, type WrapHandle, wrapStdioServer } from '@tunedness/mcpguard-proxy';
 import { AuditWriter } from '../audit-writer.js';
 import { loadPolicy, resolveAgainst } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';

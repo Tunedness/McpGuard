@@ -8,7 +8,12 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { type GuardLock, LockFormatError, parseLock, serializeLock } from '@mcpguard/core';
+import {
+  type GuardLock,
+  LockFormatError,
+  parseLock,
+  serializeLock,
+} from '@tunedness/mcpguard-core';
 import { messageOf } from './errors.js';
 
 /** What reading the lock found. */

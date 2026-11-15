@@ -8,7 +8,7 @@
  * threshold and false positives at another, which is exactly the sleight the
  * sibling tool refused.
  */
-import type { CompiledRuleset } from '@mcpguard/detect';
+import type { CompiledRuleset } from '@tunedness/mcpguard-detect';
 import { splitOf } from './corpus.js';
 import { optionsAt, replay } from './replay.js';
 import type { CorpusItem, Split } from './types.js';

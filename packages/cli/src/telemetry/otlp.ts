@@ -10,7 +10,7 @@
  * is this tool's, reserved for it by the umbrella; a test keeps the sibling from
  * emitting it and this is the other side of that contract.
  */
-import type { SecurityEvent } from '@mcpguard/core';
+import type { SecurityEvent } from '@tunedness/mcpguard-core';
 
 /** The OTLP attribute encoding: `{ key, value: { stringValue | intValue } }`. */
 type OtlpAttribute = { key: string; value: Record<string, unknown> };

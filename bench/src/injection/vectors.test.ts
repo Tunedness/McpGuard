@@ -1,5 +1,5 @@
-import { loadRuleset, scanContent } from '@mcpguard/detect';
-import { loadRulesetData } from '@mcpguard/ruleset';
+import { loadRuleset, scanContent } from '@tunedness/mcpguard-detect';
+import { loadRulesetData } from '@tunedness/mcpguard-ruleset';
 import { describe, expect, it } from 'vitest';
 
 /**

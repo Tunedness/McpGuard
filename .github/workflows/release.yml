@@ -37,6 +37,14 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run schema:check
+      # What gets published, installed into an empty directory and run: the
+      # last check before the `publish` job below is allowed to start. The cache
+      # is filled in its own step, the only one that goes online for this check;
+      # the smoke run itself is offline.
+      - name: Warm npm cache for the package smoke test (network)
+        run: npm run pack:warm
+      - name: Package smoke test (offline)
+        run: npm run pack:smoke
 
   version:
     name: version
@@ -56,7 +64,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx changeset version
-      - run: echo "::notice::Update the *_VERSION constants in src/ to match the bumped manifests before publishing."
+      - run: echo "::notice::Update the *_VERSION constants in src/ to match the bumped manifests, and packages/ruleset/index.json engineRange to the new engine minor; packages/cli/src/packaging.test.ts fails on main and in the publish gate until they agree."
       # Explicit paths, never `git add -A`: this repository owns the code on its
       # release path.
       - name: Open the release PR

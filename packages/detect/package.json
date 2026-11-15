@@ -1,8 +1,17 @@
 {
-  "name": "@mcpguard/detect",
-  "version": "0.0.0",
+  "name": "@tunedness/mcpguard-detect",
+  "version": "0.1.1",
   "description": "Pure tier-1 detection engine for McpGuard: prompt-injection detectors, PII recognisers, scoring and strip. No I/O, no protocol, no model.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tunedness/McpGuard.git",
+    "directory": "packages/detect"
+  },
+  "homepage": "https://github.com/Tunedness/McpGuard#readme",
+  "bugs": {
+    "url": "https://github.com/Tunedness/McpGuard/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20.19"
@@ -15,10 +24,6 @@
     "./ruleset": {
       "types": "./dist/ruleset/index.d.ts",
       "default": "./dist/ruleset/index.js"
-    },
-    "./testing": {
-      "types": "./dist/testing.d.ts",
-      "default": "./dist/testing.js"
     }
   },
   "files": [

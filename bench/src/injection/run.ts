@@ -19,8 +19,8 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRuleset } from '@mcpguard/detect';
-import { loadRulesetData, RULESET_VERSION } from '@mcpguard/ruleset';
+import { loadRuleset } from '@tunedness/mcpguard-detect';
+import { loadRulesetData, RULESET_VERSION } from '@tunedness/mcpguard-ruleset';
 import { generateCorpus } from './corpus.js';
 import { type FamilyBreakdown, familyBreakdown } from './report.js';
 import { type Metrics, metricsAt, partition, sweep } from './sweep.js';

@@ -88,7 +88,7 @@ describe('strip with a real ruleset', () => {
   const ruleset = loadRuleset({
     schemaVersion: 1,
     rulesetVersion: '1.0.0',
-    engineRange: '^0.0.0',
+    engineRange: '^0.1.0',
     locales: ['en'],
     rules: [
       {

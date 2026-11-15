@@ -1,4 +1,4 @@
-# @mcpguard/core
+# @tunedness/mcpguard-core
 
 The pure decision engine behind [McpGuard](../../README.md): policy and access
 control, dangerous-capability combinations, manifest pinning, and the

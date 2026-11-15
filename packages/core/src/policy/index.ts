@@ -1,7 +1,7 @@
 /**
  * The policy surface: the schema, the compiler and the two evaluators.
  *
- * Exported as its own entry point (`@mcpguard/core/policy`) so a tool that only
+ * Exported as its own entry point (`@tunedness/mcpguard-core/policy`) so a tool that only
  * wants to validate a file — an editor plugin, a CI check — does not pull in
  * the audit chain and the manifest normaliser with it.
  */

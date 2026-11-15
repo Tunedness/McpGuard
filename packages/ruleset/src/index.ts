@@ -1,10 +1,10 @@
 /**
- * `@mcpguard/ruleset` — the detection ruleset, as data.
+ * `@tunedness/mcpguard-ruleset` — the detection ruleset, as data.
  *
  * ADR-003 keeps the rules out of the code and versions them separately, so an
  * answer to a new attack shape ships without an engine release. This module is
  * the smallest possible seam: it reads the JSON files that sit next to it and
- * hands back one plain object, in the shape `@mcpguard/detect` validates,
+ * hands back one plain object, in the shape `@tunedness/mcpguard-detect` validates,
  * digests and compiles. Nothing here is executed by the engine; it is data.
  *
  * The package declares no npm dependencies. `node:fs` is a builtin, and reading

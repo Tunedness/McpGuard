@@ -1,8 +1,17 @@
 {
-  "name": "mcpguard",
-  "version": "0.0.0",
+  "name": "@tunedness/mcpguard",
+  "version": "0.1.1",
   "description": "Put a guard in front of your MCP servers. The McpGuard command line entry point.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tunedness/McpGuard.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/Tunedness/McpGuard#readme",
+  "bugs": {
+    "url": "https://github.com/Tunedness/McpGuard/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20.19"
@@ -37,10 +46,10 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@mcpguard/core": "*",
-    "@mcpguard/detect": "*",
-    "@mcpguard/proxy": "*",
-    "@mcpguard/ruleset": "*",
+    "@tunedness/mcpguard-core": "0.1.1",
+    "@tunedness/mcpguard-detect": "0.1.1",
+    "@tunedness/mcpguard-proxy": "0.1.1",
+    "@tunedness/mcpguard-ruleset": "^0.1.1",
     "yaml": "^2.9.1"
   },
   "publishConfig": {

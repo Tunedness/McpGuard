@@ -42,6 +42,20 @@ jobs:
       - name: Test
         run: npm test
 
+      # Packs every package, installs the tarballs into an empty directory and
+      # runs the installed `mcpguard`. The workspace tests cannot see a missing
+      # file in `files` or an `exports` entry that points nowhere; this can.
+      # The smoke test itself never goes online. `npm ci` caches the tarballs of
+      # this repository's lockfile, not the registry metadata a fresh install of
+      # the packed tarballs resolves against, so the cache is filled first, in
+      # this one named step: the only place the smoke test's dependencies are
+      # fetched from the network.
+      - name: Warm npm cache for the package smoke test (network)
+        run: npm run pack:warm
+
+      - name: Package smoke test
+        run: npm run pack:smoke
+
   # The GuardPolicy schema is the public contract: people's editors validate
   # against the committed JSON Schema, while the runtime validates against the
   # zod object it is generated from. If those two ever disagree, a policy that

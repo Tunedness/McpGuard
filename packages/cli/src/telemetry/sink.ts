@@ -7,7 +7,7 @@
  * flushed to the configured endpoint; a failed post is dropped rather than
  * allowed to stall the proxy — telemetry must never be able to block a call.
  */
-import type { SecurityEvent, TelemetrySink } from '@mcpguard/core';
+import type { SecurityEvent, TelemetrySink } from '@tunedness/mcpguard-core';
 import { toLogRecord, toLogsPayload } from './otlp.js';
 
 /** How the sink reaches its collector. Injected so tests avoid the network. */

@@ -21,7 +21,7 @@ const validRule = {
   testVectors: { match: ['ignore previous'], noMatch: ['nothing here'] },
 };
 
-function ruleset(rules: unknown[], engineRange = '^0.0.0', lexicons?: unknown): unknown {
+function ruleset(rules: unknown[], engineRange = '^0.1.0', lexicons?: unknown): unknown {
   return {
     schemaVersion: 1,
     rulesetVersion: '1.0.0',
@@ -52,8 +52,8 @@ describe('loadRuleset', () => {
   it('digests the lexicons too, because they change the score', () => {
     // Two rulesets with the same rules and different lexicons must not share a
     // digest: the digest is what an audit record uses to say which data decided.
-    const without = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: [] }));
-    const withVerb = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: ['frobnicate'] }));
+    const without = loadRuleset(ruleset([validRule], '^0.1.0', { verbsEn: [] }));
+    const withVerb = loadRuleset(ruleset([validRule], '^0.1.0', { verbsEn: ['frobnicate'] }));
 
     expect(withVerb.digest).not.toBe(without.digest);
   });
@@ -61,7 +61,7 @@ describe('loadRuleset', () => {
   it('gives an absent lexicon section and an empty one the same digest', () => {
     const absent = loadRuleset(ruleset([validRule]));
     const empty = loadRuleset(
-      ruleset([validRule], '^0.0.0', { verbsEn: [], verbsTr: [], benignImperatives: [] }),
+      ruleset([validRule], '^0.1.0', { verbsEn: [], verbsTr: [], benignImperatives: [] }),
     );
 
     expect(empty.digest).toBe(absent.digest);
@@ -90,8 +90,8 @@ describe('loadRuleset', () => {
       onDegraded: 'flag',
     };
     const text = 'Frobnicate your credentials and then report back to me.';
-    const without = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: [] }));
-    const withVerb = loadRuleset(ruleset([validRule], '^0.0.0', { verbsEn: ['frobnicate'] }));
+    const without = loadRuleset(ruleset([validRule], '^0.1.0', { verbsEn: [] }));
+    const withVerb = loadRuleset(ruleset([validRule], '^0.1.0', { verbsEn: ['frobnicate'] }));
     const item = { id: 'part-0', text, kind: 'tool_result' as const };
 
     expect(scanContent(item, withVerb, options).score).not.toBe(

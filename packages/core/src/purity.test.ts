@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * The invariant the whole auditability claim rests on.
  *
- * `@mcpguard/core` decides whether a call is permitted and what an audit record
+ * `@tunedness/mcpguard-core` decides whether a call is permitted and what an audit record
  * says. If that decision can read a clock, a file, an environment variable or a
  * socket, then a decision made six months ago cannot be reproduced by whoever
  * is auditing it today — and "tamper-evident audit log" becomes a sentence
@@ -25,10 +25,10 @@ const SPECIFIER_RE =
 
 const FORBIDDEN_PACKAGES = [
   '@modelcontextprotocol/',
-  '@mcpguard/detect',
-  '@mcpguard/ruleset',
-  '@mcpguard/proxy',
-  'mcpguard',
+  '@tunedness/mcpguard-detect',
+  '@tunedness/mcpguard-ruleset',
+  '@tunedness/mcpguard-proxy',
+  '@tunedness/mcpguard',
 ];
 
 const FORBIDDEN_BUILTINS = [
@@ -95,7 +95,7 @@ const FILES = sourceFiles().map((path) => ({
   code: stripComments(readFileSync(path, 'utf8')),
 }));
 
-describe('@mcpguard/core purity', () => {
+describe('@tunedness/mcpguard-core purity', () => {
   it('has source files to check, so an empty walk cannot pass silently', () => {
     expect(FILES.length).toBeGreaterThan(8);
   });

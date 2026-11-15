@@ -1,4 +1,4 @@
-import { type GuardLock, serverLockOf, type ToolDefinition } from '@mcpguard/core';
+import { type GuardLock, serverLockOf, type ToolDefinition } from '@tunedness/mcpguard-core';
 import { describe, expect, it } from 'vitest';
 import type { LockState, LockStore } from './lock-file.js';
 import {

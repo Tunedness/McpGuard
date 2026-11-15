@@ -10,8 +10,13 @@
 import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type CompiledRuleset, loadRuleset, type ScanOptions, scanContent } from '@mcpguard/detect';
-import { loadRulesetData } from '@mcpguard/ruleset';
+import {
+  type CompiledRuleset,
+  loadRuleset,
+  type ScanOptions,
+  scanContent,
+} from '@tunedness/mcpguard-detect';
+import { loadRulesetData } from '@tunedness/mcpguard-ruleset';
 import { generateCorpus } from '../injection/corpus.js';
 import { type Stats, summarize } from './stats.js';
 

@@ -1,8 +1,17 @@
 {
-  "name": "@mcpguard/core",
-  "version": "0.0.0",
+  "name": "@tunedness/mcpguard-core",
+  "version": "0.1.1",
   "description": "Pure decision engine for McpGuard: policy, access control, manifest pinning and the hash-chained audit record. No I/O, no protocol.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tunedness/McpGuard.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/Tunedness/McpGuard#readme",
+  "bugs": {
+    "url": "https://github.com/Tunedness/McpGuard/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20.19"
@@ -15,10 +24,6 @@
     "./policy": {
       "types": "./dist/policy/index.d.ts",
       "default": "./dist/policy/index.js"
-    },
-    "./testing": {
-      "types": "./dist/testing.d.ts",
-      "default": "./dist/testing.js"
     },
     "./schemas/guardpolicy.v1.schema.json": "./schemas/guardpolicy.v1.schema.json"
   },

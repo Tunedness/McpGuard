@@ -5,7 +5,7 @@
  * starting a proxy. A misspelled key is a security control that silently did not
  * apply, so this is the command that catches it before an incident does.
  */
-import { compilePolicy } from '@mcpguard/core';
+import { compilePolicy } from '@tunedness/mcpguard-core';
 import { loadPolicy } from '../config.js';
 import { EXIT } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';

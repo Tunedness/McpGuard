@@ -1,5 +1,5 @@
 /**
- * `@mcpguard/core` — the decision engine.
+ * `@tunedness/mcpguard-core` — the decision engine.
  *
  * ## The purity invariant
  *

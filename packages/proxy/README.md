@@ -1,4 +1,4 @@
-# @mcpguard/proxy
+# @tunedness/mcpguard-proxy
 
 The MCP adapter for [McpGuard](../../README.md): a `Server`/`Client` pair that
 guards `tools/call`, `tools/list` and `resources/read`, and forwards everything

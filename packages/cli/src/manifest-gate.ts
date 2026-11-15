@@ -1,7 +1,7 @@
 /**
  * The `tools/list` gate: manifest pinning, wired to a lock file (ADR-005).
  *
- * The pure half (normalising, hashing, diffing) lives in `@mcpguard/core`. This
+ * The pure half (normalising, hashing, diffing) lives in `@tunedness/mcpguard-core`. This
  * is the half that decides what a diff *means* for the traffic: first contact
  * pins, a later difference halts or is flagged, and a server that cannot be
  * held to a lock is not trusted by default.
@@ -26,8 +26,8 @@ import {
   type ToolDefinition,
   toToolDefinition,
   withServerLock,
-} from '@mcpguard/core';
-import type { Gates } from '@mcpguard/proxy';
+} from '@tunedness/mcpguard-core';
+import type { Gates } from '@tunedness/mcpguard-proxy';
 import { messageOf } from './errors.js';
 import type { LockStore } from './lock-file.js';
 

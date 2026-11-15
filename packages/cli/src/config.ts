@@ -8,7 +8,12 @@
  */
 import { readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { type GuardPolicy, PolicyValidationError, parsePolicy, pathOf } from '@mcpguard/core';
+import {
+  type GuardPolicy,
+  PolicyValidationError,
+  parsePolicy,
+  pathOf,
+} from '@tunedness/mcpguard-core';
 import { LineCounter, parseDocument } from 'yaml';
 import { CliError, EXIT } from './errors.js';
 

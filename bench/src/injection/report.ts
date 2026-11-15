@@ -5,7 +5,7 @@
  * guessing. These tables are what a reader checks it against — and what makes an
  * in-sample result honest rather than triumphant.
  */
-import type { CompiledRuleset } from '@mcpguard/detect';
+import type { CompiledRuleset } from '@tunedness/mcpguard-detect';
 import { optionsAt, replay } from './replay.js';
 import type { CorpusItem } from './types.js';
 

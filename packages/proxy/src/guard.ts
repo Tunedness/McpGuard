@@ -9,10 +9,10 @@
  * rug-pull is caught. The transport is not here — this takes plain values and
  * returns plain values, so it can be tested without a socket.
  */
-import type { AccessEvaluation, CompiledPolicy } from '@mcpguard/core';
-import { evaluateAccess } from '@mcpguard/core';
-import type { CompiledRuleset, ScanOptions, ScanVerdict } from '@mcpguard/detect';
-import { scanContent } from '@mcpguard/detect';
+import type { AccessEvaluation, CompiledPolicy } from '@tunedness/mcpguard-core';
+import { evaluateAccess } from '@tunedness/mcpguard-core';
+import type { CompiledRuleset, ScanOptions, ScanVerdict } from '@tunedness/mcpguard-detect';
+import { scanContent } from '@tunedness/mcpguard-detect';
 import { extractText, type ResultLike, replaceText } from './content.js';
 
 /** Everything the guard needs that the host injects once. */

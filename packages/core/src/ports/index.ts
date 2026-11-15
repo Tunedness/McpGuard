@@ -1,7 +1,7 @@
 /**
  * Every edge of the engine, expressed as an interface.
  *
- * `@mcpguard/core` performs no I/O and reads no ambient state. Time, identity,
+ * `@tunedness/mcpguard-core` performs no I/O and reads no ambient state. Time, identity,
  * persistence, telemetry and the audit key all arrive through these ports.
  *
  * For a security proxy that is not an aesthetic preference. The product's

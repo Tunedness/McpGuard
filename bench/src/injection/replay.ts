@@ -10,8 +10,8 @@
  * phases 4 and 5 are calibrated to move.
  */
 
-import type { ScanOptions } from '@mcpguard/detect';
-import { type CompiledRuleset, scanContent } from '@mcpguard/detect';
+import type { ScanOptions } from '@tunedness/mcpguard-detect';
+import { type CompiledRuleset, scanContent } from '@tunedness/mcpguard-detect';
 import type { CorpusItem } from './types.js';
 
 /** One item's outcome under one operating point. */

@@ -8,7 +8,15 @@ o faz sırasında ortaya çıkan çelişkileri tutar.
 
 ## Nerede kaldık
 
-**v0.1.0 hazır, yayımlanmadı.** Faz 0–10 ve 12 bitti; Faz 11 (HTTP gateway)
+**v0.1.1 yayına hazır, publish bekliyor.** Beş yayınlanan paket (`@tunedness/mcpguard`,
+`@tunedness/mcpguard-core|detect|ruleset|proxy`) changesets akışıyla 0.1.1'e taşındı:
+CHANGELOG'lar yazıldı, `*_VERSION` sabitleri, iç bağımlılık aralıkları ve lockfile
+tutarlı, `packaging.test.ts` ve `pack:smoke` yeşil. Tag atılmadı, publish yapılmadı:
+yayın düğmesi (`release.yml` → `publish`) kullanıcının. 0.1.0 hiç yayımlanmadı; onu
+anlatan baseline changeset'i 0.1.0 girdisi olarak CHANGELOG'da duruyor, 0.1.1
+girdisi Faz 14, 15, 25, 26 düzeltmelerini ve yeniden adlandırmayı anlatıyor.
+
+Ürün durumu: Faz 0–10 ve 12 bitti; Faz 11 (HTTP gateway)
 bilinçle P1'e bırakıldı. `mcpguard wrap -- <sunucu>` gerçek MCP protokolüyle
 doğrulanmış tam korumalı proxy: deterministik injection taraması (700 öğelik
 korpusta %100 recall / %0 FP, in-sample), PII maskeleme, erişim denetimi,
@@ -40,9 +48,10 @@ testle kilitli; ayrıntı aşağıdaki Faz 26 bölümünde.
 
 Sıradaki iş:
 
-1. **Yayın adı/scope kararı** — kullanıcının. Karar verilmeden publish yok;
-   ardından `release.yml` publish adımı ve `*_VERSION` sabitleri (şu an `0.0.0`)
-   güncellenir.
+1. **Yayın düğmesi** — kullanıcının. Adlar kararlı (`@tunedness/mcpguard` +
+   `@tunedness/mcpguard-*`), sürüm 0.1.1'e taşındı (`changeset version` koşuldu) ve
+   paketler tarball'dan kurulup koşturuluyor (`npm run pack:smoke`). Kalan:
+   `release.yml`'in `publish` adımının elle tetiklenmesi.
 2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
 3. Diğer P1'ler: korumalı `serve` gateway, sağlık verisi tanıyıcıları, Kademe 2
    SLM hakem, checkpoint syslog sink'i, trace context yayımı.
@@ -89,7 +98,9 @@ Araştırma dört varsayımı geçersiz kıldı, üç karar eksikti.
 
 **Yapılmadı, kullanıcı hesabı gerekiyor:** npm'de `mcpguard` ve `@mcpguard`
 scope'unun talep edilmesi. İkisi de bugün itibarıyla boş (registry 404);
-`mcp-guard` başkasında (0.1.0) ve kullanılmayacak.
+`mcp-guard` başkasında (0.1.0) ve kullanılmayacak. *(Güncelleme, Faz 16: yayın
+adları `@tunedness/mcpguard` ve `@tunedness/mcpguard-*` olarak kararlaştırıldı; bu
+paragraf Faz 0 anındaki durumu anlatır.)*
 
 ---
 
@@ -99,12 +110,12 @@ npm workspaces (pnpm yok), ESM-only, `engines: node >=20.19`, `tsc -b` project
 references, bundler yok.
 
 ```
-packages/core/      @mcpguard/core     — SAF karar motoru
-packages/detect/    @mcpguard/detect   — SAF tarama motoru
-packages/ruleset/   @mcpguard/ruleset  — VERİ paketi, bağımsız sürümlü
-packages/proxy/     @mcpguard/proxy    — MCP adaptörü
-packages/cli/       mcpguard           — bin, npx giriş noktası
-bench/              @mcpguard/bench (private)
+packages/core/      @tunedness/mcpguard-core     — SAF karar motoru
+packages/detect/    @tunedness/mcpguard-detect   — SAF tarama motoru
+packages/ruleset/   @tunedness/mcpguard-ruleset  — VERİ paketi, bağımsız sürümlü
+packages/proxy/     @tunedness/mcpguard-proxy    — MCP adaptörü
+packages/cli/       @tunedness/mcpguard (bin mcpguard) — bin, npx giriş noktası
+bench/              @tunedness/mcpguard-bench (private)
 ```
 
 Araçlar: TypeScript 5.9.3, Biome 2.5.14, Vitest 5.0.1, Changesets 3.
@@ -131,10 +142,10 @@ Manifest'lerde zorlanır, konvansiyona bırakılmaz:
 
 | Paket | dependencies |
 | --- | --- |
-| `@mcpguard/core` | `zod` **yalnızca** |
-| `@mcpguard/detect` | `zod` **yalnızca** |
-| `@mcpguard/ruleset` | **hiçbiri** |
-| `@mcpguard/proxy` | `@mcpguard/core`, `@mcpguard/detect`, `@modelcontextprotocol/{server,client,core}` |
+| `@tunedness/mcpguard-core` | `zod` **yalnızca** |
+| `@tunedness/mcpguard-detect` | `zod` **yalnızca** |
+| `@tunedness/mcpguard-ruleset` | **hiçbiri** |
+| `@tunedness/mcpguard-proxy` | `@tunedness/mcpguard-core`, `@tunedness/mcpguard-detect`, `@modelcontextprotocol/{server,client,core}` |
 | `mcpguard` | yukarıdaki dördü + `yaml` |
 
 `core` ve `detect` **saftır**: `@modelcontextprotocol/*` yok, I/O builtin yok,
@@ -157,7 +168,7 @@ Yok. Faz 1 yalnız iskelet kurdu ve `.ssot` ile çelişen bir şeye rastlamadı.
 
 ## Faz 2 — saf çekirdek: politika, erişim denetimi, portlar (bitti)
 
-`@mcpguard/core`. Tarama yok; sözleşme var. 110 yeni test, `core/src` üzerinde
+`@tunedness/mcpguard-core`. Tarama yok; sözleşme var. 110 yeni test, `core/src` üzerinde
 %99 statement / %89 branch.
 
 ```
@@ -284,7 +295,7 @@ hâlâ bulgu olarak raporlanıyor, yalnız puan almıyorlar.
 
 ---
 
-## Faz 4 — `@mcpguard/ruleset` + injection tarama motoru (bitti)
+## Faz 4 — `@tunedness/mcpguard-ruleset` + injection tarama motoru (bitti)
 
 Kademe 1 dedektör aileleri, tek normalizasyon geçişi, Aho–Corasick, kural seti
 veri paketi. 220+ yeni test.
@@ -361,7 +372,7 @@ logged in" artık eşleşmiyor).
 
 - `ScanVerdict.edits` boş; `strip` eylemi Faz 5.
 - PII tanıyıcıları (`pii/recognizers`) ve maskeleme Faz 5.
-- `@mcpguard/ruleset` şu an yalnız injection kuralları; PII recognizer verisi
+- `@tunedness/mcpguard-ruleset` şu an yalnız injection kuralları; PII recognizer verisi
   Faz 5'te aynı pakete girer.
 - Kural setinin kendi digest'ini `index.json`'a damgalayan lint scripti henüz
   yok; digest şimdilik yükleme anında hesaplanıyor (yeterli, ama tedarik
@@ -468,7 +479,7 @@ düzeltmesi zaten Faz 0'da yazılmıştı, burada uygulandı.
 
 ---
 
-## Faz 7 — `@mcpguard/proxy` (bitti, tesisat kısmen doğrulandı)
+## Faz 7 — `@tunedness/mcpguard-proxy` (bitti, tesisat kısmen doğrulandı)
 
 MCP adaptörü. Motordan bağımsız dosyalar + üç kapı + `wrap` giriş noktası.
 `@modelcontextprotocol/{server,client,core}@2.0.0` üzerinde. 557 test.
@@ -529,7 +540,7 @@ Modern era serving'i Faz 8'de gerçek koşumla netleşecek.
 
 ```
 packages/cli/src/config.ts        yaml + LineCounter, dosya:satır hata
-packages/cli/src/ruleset.ts       @mcpguard/ruleset → loadRuleset
+packages/cli/src/ruleset.ts       @tunedness/mcpguard-ruleset → loadRuleset
 packages/cli/src/runtime.ts       policy+ruleset → guard gates (AuditRecorder)
 packages/cli/src/audit-writer.ts  append-only JSONL, hash zinciri sahibi
 packages/cli/src/ulid.ts          oturum kimliği (çekirdek değil, CLI mint eder)
@@ -701,12 +712,11 @@ opsiyonel OTLP telemetri. Komutlar: `wrap`, `scan`, `validate`, `init`,
 
 ### Devralan kişiye
 
-1. **Yayın adı/scope kararı verilmeden yayımlama.** `mcpguard` ve `@mcpguard`
-   registry'de boş (Faz 0'da doğrulandı); scope talep edilmeli, sonra
-   `release.yml` publish adımı ve `*_VERSION` sabitleri güncellenmeli.
+1. ~~Yayın adı/scope kararı~~ — verildi ve Faz 16'da uygulandı:
+   `@tunedness/mcpguard` (bin `mcpguard`) + `@tunedness/mcpguard-*`.
 2. **`release.yml` iki adımlı:** `version` (changeset PR açar) ve `publish`
-   (`environment: npm`, provenance). Yayın öncesi `*_VERSION` sabitleri
-   manifest'lerle eşitlenmeli (şu an hepsi `0.0.0`).
+   (`environment: npm`, provenance). `*_VERSION` sabitleri manifest'lerle eşit
+   olmalı; `packages/cli/src/packaging.test.ts` bunu zorlar (Faz 16).
 3. **Gerçek-süreç testi (`wrap-process.test.ts`) her koşuda çalışır** ve
    proxy'yi gerçek sunucuyla sınar; kaldırılmamalı.
 4. **Rakamlar yumuşatılmaz:** injection ve latency CI kapıları ulaşılanın
@@ -949,7 +959,7 @@ Bulgu önce testle yeniden üretildi, sonra düzeltildi.
 packages/detect/src/ruleset/load.ts          digest = sha256(stable({ rules, lexicons }))
 packages/detect/src/ruleset/ruleset.test.ts  4 yeni test
 bench/injection/results.json                 yalnız rulesetDigest değişti
-.changeset/lexicon-digest.md                 @mcpguard/detect patch
+.changeset/lexicon-digest.md                 @tunedness/mcpguard-detect patch
 ```
 
 **Yeniden üretme.** `ruleset.test.ts`'e iki test eklendi: aynı kurallar, farklı
@@ -976,3 +986,69 @@ ve o motor sürümüyle yeniden üretilir.
 **Devralan kişiye.** `bench/src/injection/run.ts:69` `engineVersion` alanına
 `ruleset.rulesetVersion` yazıyor (motor sürümü değil). Bu fazda dokunulmadı:
 `results.json`'da ikinci bir satırı oynatırdı. Ayrı iş.
+
+---
+
+## Faz 16 — npm yayın hazırlığı (bitti)
+
+Yayın yapılmadı; paketler yayınlanabilir ve kurulduğunda çalışır hâle getirildi.
+
+```
+packages/*/package.json              ad değişikliği, kırık export'lar kaldırıldı
+packages/cli/src/packaging.test.ts   sürüm sabitleri == manifest, paket adları, bin adı
+scripts/pack-smoke.mjs               pack -> temiz dizine kur -> mcpguard --version / init / validate / scan
+package.json                         pack:smoke script'i
+.github/workflows/ci.yml             "Package smoke test" adımı
+.github/workflows/release.yml        gate'e pack:smoke
+```
+
+**Adlar.** CLI `@tunedness/mcpguard` (bin hâlâ `mcpguard`), kütüphaneler
+`@tunedness/mcpguard-core|detect|ruleset|proxy`; `bench` özel kalır
+(`@tunedness/mcpguard-bench`). Bağımlılıklar, import'lar, `tsconfig` referansları
+(yol tabanlı olduklarından değişmedi), changeset'ler, README ve docs birlikte
+güncellendi. `purity.test.ts`'lerdeki yasak listesi `@tunedness/mcpguard`
+önekiyle CLI'yi de kapsıyor.
+
+**Kırık export'lar.** `core` ve `detect` `./testing` export ediyordu, kaynak yoktu
+ve repoda kullanan yoktu: kaldırıldı. `ruleset` `pii/` dizinini `files` ve
+`exports`'ta listeliyordu, dizin yok: kaldırıldı; PHI verisi (Faz 21) gelince geri
+eklenir. `biome.json`'daki `!packages/ruleset/pii` dışlaması bilerek kaldı.
+
+**Sürüm sabitleri.** Türetmek yerine test seçildi: saf paketler `package.json`
+okuyamaz (purity), `--version` ve audit kayıtları sabiti okur. `packaging.test.ts`
+beş sabiti kaynaktan okuyup manifest'le karşılaştırır; `changeset version` bir
+manifest'i sabit olmadan artırırsa release PR'ında CI kırmızı olur.
+`RULESET_VERSION` (verinin sürümü) dokunulmadı.
+
+**Paket bütünlüğü.** `scripts/pack-smoke.mjs` her paketi `npm pack` ile paketler,
+yalnız tarball'ları boş bir dizine kurar, manifest'in vaat ettiği her `bin` ve
+`exports` yolunun tarball'da olduğunu, `README.md`/`NOTICE` bulunduğunu, `src/`
+gönderilmediğini doğrular; sonra kurulu `mcpguard`'ı koşturur: `--version`,
+`init`, `validate`, zararsız dosyada `scan` (allow) ve bariz kötücül dosyada
+`scan` (flag). Ağa hiç çıkmaz: yalnız `--offline`; cache eksikse neden
+adlandırılarak durur. Cache'i CI ve release gate'indeki ayrı, adı açık bir adım
+doldurur: `npm run pack:warm` (`pack-smoke.mjs --warm-cache`), aynı tarball'ları
+ağdan kurup atar. `npm ci` bunu yapmaz (lockfile tarball'larını cache'ler, kurulumun
+aralık çözümlediği registry metadata'sını değil). Ağ erişimi yalnız bu adımdadır.
+
+**Devralan kişiye.** `release.yml` `version` adımı `*_VERSION` sabitlerini
+kendisi güncellemiyor; release PR'ını `GITHUB_TOKEN` açtığı için `ci.yml` o PR'da
+koşmaz, `packaging.test.ts` ilk `main` push'unda ve `publish` gate'inde kırmızı olur;
+sabitler elle düzeltilir. Bunu otomatikleştirmek küçük bir betik işi.
+
+**Yayın metadata'sı.** Her yayınlanan manifest `repository` (url + `directory`)
+taşır: provenance'lı publish bunu ister. İç bağımlılıklar gerçek aralıktır
+(`*` değil; changesets `*`'ı güncellemez): CLI core/detect/proxy'ye tam sürümle
+sabitlenir, ruleset'e `^` ile bağlanır (veri paketi motor sürümü beklemeden
+çıkabilsin, ADR-003); proxy kardeşlerine `^`. `packaging.test.ts` bunları kilitler.
+
+**v0.1.1 hazırlığı.** `changeset version` iki turda koşuldu: önce 0.1.0 (baseline
+changeset'i), sonra Faz 14, 15, 25, 26 ve yeniden adlandırmayı anlatan beş patch
+changeset'iyle 0.1.1; böylece 0.1.0 bölümü CHANGELOG'da kalır. Sonrasında elle:
+beş `*_VERSION` sabiti 0.1.1'e çekildi ve `packages/ruleset/index.json`
+`engineRange`'i `^0.0.0` → `^0.1.0` yapıldı. İkincisi sürümleme tuzağı: motor
+0.x'te minor'u uyumluluk çizgisi sayar (`engineSatisfies`), yani `^0.0.0` 0.1.1
+motorunu reddeder ve **her paketin testi kırılır**. Her minor artışında
+`engineRange` (ve `detect`/`proxy` testlerindeki sabit `'^0.1.0'` fixture'ları)
+birlikte güncellenmeli. `engineRange` digest'te değil (Faz 26), kural verisi ve
+sonuçlar değişmedi.

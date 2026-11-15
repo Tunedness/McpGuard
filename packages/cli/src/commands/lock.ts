@@ -23,8 +23,8 @@ import {
   type ToolDefinition,
   toToolDefinition,
   withServerLock,
-} from '@mcpguard/core';
-import { listStdioTools } from '@mcpguard/proxy';
+} from '@tunedness/mcpguard-core';
+import { listStdioTools } from '@tunedness/mcpguard-proxy';
 import { loadPolicy, resolveAgainst } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';

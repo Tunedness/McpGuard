@@ -1,5 +1,5 @@
 {
-  "name": "@mcpguard/bench",
+  "name": "@tunedness/mcpguard-bench",
   "version": "0.0.0",
   "private": true,
   "description": "The McpGuard detection corpus, the replay and sweep harness, and the latency harness. Never published.",
@@ -16,8 +16,8 @@
     "bench:latency": "node dist/latency/run.js"
   },
   "dependencies": {
-    "@mcpguard/core": "*",
-    "@mcpguard/detect": "*",
-    "@mcpguard/ruleset": "*"
+    "@tunedness/mcpguard-core": "*",
+    "@tunedness/mcpguard-detect": "*",
+    "@tunedness/mcpguard-ruleset": "*"
   }
 }

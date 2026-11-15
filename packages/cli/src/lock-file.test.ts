@@ -1,7 +1,7 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emptyLock, lockServer, serializeLock, withServerLock } from '@mcpguard/core';
+import { emptyLock, lockServer, serializeLock, withServerLock } from '@tunedness/mcpguard-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolveAgainst } from './config.js';
 import { fileLockStore } from './lock-file.js';

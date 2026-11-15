@@ -47,7 +47,9 @@ function specifiers(code: string): string[] {
 }
 
 function importsEngine(code: string): boolean {
-  return specifiers(code).some((s) => s === '@mcpguard/core' || s === '@mcpguard/detect');
+  return specifiers(code).some(
+    (s) => s === '@tunedness/mcpguard-core' || s === '@tunedness/mcpguard-detect',
+  );
 }
 
 describe('proxy boundary', () => {
