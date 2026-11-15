@@ -7,7 +7,7 @@
  * quoting one number. The scan is pure and synchronous, so this measures it
  * directly; the proxy's framing is small and constant on top.
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -76,10 +76,30 @@ function main(): void {
       2,
     )}\n`,
   );
-  writeFileSync(join(dir, 'results.md'), render(rows, median, p95size, crossover, referenceMet));
+  writeFileSync(
+    join(dir, 'results.md'),
+    render(rows, median, p95size, crossover, referenceMet) + preservedHttpSection(dir),
+  );
   console.log(
     `reference workload p95 < ${TARGET_MS}ms: ${referenceMet}; budget holds up to ~${crossover} bytes`,
   );
+}
+
+/**
+ * The HTTP gateway section `http.ts` keeps in the same file. It is a separate
+ * benchmark with its own command, so regenerating the scan numbers must not
+ * discard it.
+ */
+function preservedHttpSection(dir: string): string {
+  try {
+    const current = readFileSync(join(dir, 'results.md'), 'utf8');
+    const from = current.indexOf('<!-- http-gateway:start -->');
+    const end = '<!-- http-gateway:end -->';
+    const to = current.indexOf(end);
+    return from !== -1 && to > from ? `\n${current.slice(from, to + end.length)}\n` : '';
+  } catch {
+    return '';
+  }
 }
 
 function render(

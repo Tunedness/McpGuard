@@ -9,6 +9,8 @@
  * This module imports neither engine package. See `boundary.test.ts`.
  */
 
+import { CLIENT_INFO_META_KEY, TRACEPARENT_META_KEY } from '@modelcontextprotocol/server';
+
 export const SESSION_BAGGAGE_KEY = 'tunedness.session-id';
 export const BAGGAGE_META_KEY = 'io.modelcontextprotocol/baggage';
 
@@ -22,7 +24,14 @@ export function baggageEntry(meta: MetaBag | undefined, name: string): string | 
   for (const member of raw.split(',')) {
     const [key, ...rest] = member.split('=');
     if (key?.trim() !== name || rest.length === 0) continue;
-    const value = decodeURIComponent(rest.join('=').split(';', 1)[0]?.trim() ?? '');
+    // Baggage comes off the wire: a member that is not valid percent-encoding is
+    // skipped, never allowed to throw into the request that carried it.
+    let value: string;
+    try {
+      value = decodeURIComponent(rest.join('=').split(';', 1)[0]?.trim() ?? '');
+    } catch {
+      continue;
+    }
     if (value !== '') return value;
   }
   return undefined;
@@ -32,16 +41,60 @@ export function baggageEntry(meta: MetaBag | undefined, name: string): string | 
  * Returns `_meta` with the session baggage member set to `sessionId`.
  *
  * If a baggage list is already present, the member is merged into it rather than
- * replacing it — a trace context travelling alongside must survive. If the
- * member is already there (an inner proxy would see this), it is left untouched:
- * the outermost proxy's answer wins, and re-injecting the same value is a no-op.
+ * replacing it — a trace context travelling alongside must survive.
+ *
+ * What happens to a session member that is already there depends on who is
+ * asking. By default it is left untouched: an inner proxy adopts the outer
+ * proxy's answer, and re-injecting the same value is a no-op. With `replace`, the
+ * existing member — whatever it holds, usable or not — is dropped and `sessionId`
+ * written in its place. The outermost proxy needs that: it has already decided
+ * which session the call belongs to (the ladder ranks `traceparent` above the
+ * baggage and skips a baggage value it cannot use), so what the upstream is told
+ * must be what its own audit record says, not whatever the caller wrote.
  */
-export function injectSession(meta: MetaBag | undefined, sessionId: string): MetaBag {
+export function injectSession(
+  meta: MetaBag | undefined,
+  sessionId: string,
+  options: { readonly replace?: boolean } = {},
+): MetaBag {
   const existing =
     typeof meta?.[BAGGAGE_META_KEY] === 'string' ? (meta[BAGGAGE_META_KEY] as string) : '';
-  const already = baggageEntry(meta, SESSION_BAGGAGE_KEY);
-  if (already !== undefined) return { ...meta };
+  if (options.replace !== true && baggageEntry(meta, SESSION_BAGGAGE_KEY) !== undefined) {
+    return { ...meta };
+  }
+  const kept =
+    options.replace === true
+      ? existing
+          .split(',')
+          .filter((member) => member.split('=', 1)[0]?.trim() !== SESSION_BAGGAGE_KEY)
+          .join(',')
+      : existing;
   const member = `${SESSION_BAGGAGE_KEY}=${encodeURIComponent(sessionId)}`;
-  const merged = existing === '' ? member : `${existing},${member}`;
-  return { ...meta, [BAGGAGE_META_KEY]: merged };
+  return { ...meta, [BAGGAGE_META_KEY]: kept === '' ? member : `${kept},${member}` };
+}
+
+/** The W3C `traceparent` a request carries on its `_meta`, if it carries one. */
+export function traceparentOf(meta: MetaBag | undefined): string | undefined {
+  const value = meta?.[TRACEPARENT_META_KEY];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/** The self-reported identity of the software that made a request. */
+export interface ClientIdentity {
+  readonly name: string;
+  readonly version?: string | undefined;
+}
+
+/**
+ * The `clientInfo` a modern request declares on its envelope.
+ *
+ * A legacy connection declares it once, in `initialize`; the caller reads it
+ * from there and hands it on.
+ */
+export function clientInfoOf(meta: MetaBag | undefined): ClientIdentity | undefined {
+  const value = meta?.[CLIENT_INFO_META_KEY];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const { name, version } = value as { name?: unknown; version?: unknown };
+  if (typeof name !== 'string' || name === '') return undefined;
+  return { name, ...(typeof version === 'string' ? { version } : {}) };
 }

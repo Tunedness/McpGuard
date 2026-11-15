@@ -267,6 +267,77 @@ const SessionSchema = z
      */
     key: z.string().min(1).default('auto'),
     idle_timeout: duration('10m'),
+    /**
+     * The most attribution entries the gateway keeps (ADR-011). An entry is one
+     * guessed `clientInfo` + address binding; when the table is full the one
+     * idle longest is dropped, so a caller cannot grow it without bound.
+     */
+    max_sessions: positiveInt().default(1024),
+    /**
+     * The most legacy upstream connections the gateway holds open at once, per
+     * server (ADR-011). A legacy downstream session owns one upstream
+     * connection — for a stdio server, one child process — so this is the real
+     * ceiling. When it is reached a new `initialize` is answered `503`; an
+     * existing session is never evicted to make room.
+     */
+    max_upstream_connections: positiveInt().default(32),
+  })
+  .prefault({});
+
+/**
+ * Where an upstream server is reached (ADR-011): a streamable HTTP endpoint, or
+ * a command to spawn that speaks stdio. Which servers a gateway will talk to is
+ * a security decision, so it is policy, not a flag.
+ */
+const UpstreamSchema = z.union([
+  z.strictObject({ url: z.url({ protocol: /^https?$/ }) }),
+  z.strictObject({
+    command: z.string().min(1),
+    args: z.array(z.string()).default([]),
+  }),
+]);
+
+const HttpSchema = z
+  .strictObject({
+    /** The largest request body accepted; a bigger one is answered `413`. */
+    max_body_bytes: positiveInt().default(4_194_304),
+    /** The largest response read from a streamable HTTP upstream. */
+    max_upstream_response_bytes: positiveInt().default(16_777_216),
+    /** Requests being served at once; beyond it, `503` with `Retry-After`. */
+    max_inflight: positiveInt().default(256),
+    /**
+     * `Host` values the gateway answers to, as hostnames. Empty means the
+     * loopback names on a loopback bind; a non-loopback bind refuses to start
+     * without them.
+     */
+    allowed_hosts: z.array(z.string().min(1)).default([]),
+    /** `Origin` hostnames accepted beyond localhost. Empty means localhost only. */
+    allowed_origins: z.array(z.string().min(1)).default([]),
+  })
+  .prefault({});
+
+const AuthSchema = z
+  .strictObject({
+    /**
+     * Static bearer tokens, by the SHA-256 of the token and never the token.
+     * The identity a token maps to is exact (ADR-011): the operator wrote the
+     * mapping. Several tokens may name one identity, which is how a token is
+     * rotated without a gap.
+     */
+    tokens: z
+      .array(
+        z.strictObject({
+          identity: z.string().min(1).max(128),
+          token_sha256: z.string().regex(/^[0-9a-f]{64}$/, 'expected 64 lowercase hex digits'),
+        }),
+      )
+      .default([])
+      .refine(
+        (tokens) => new Set(tokens.map((token) => token.token_sha256)).size === tokens.length,
+        {
+          error: 'the same token_sha256 appears twice',
+        },
+      ),
   })
   .prefault({});
 
@@ -290,8 +361,13 @@ export const GuardPolicySchemaV1 = z
       .record(
         z.string().min(1).max(64),
         z.strictObject({
-          /** Free-text, for reports. The transport is a CLI argument, not policy. */
+          /** Free-text, for reports. */
           description: z.string().min(1).max(300).optional(),
+          /**
+           * How `serve` reaches this server (ADR-011). `wrap` ignores it: there
+           * the transport is the command after `--`.
+           */
+          upstream: UpstreamSchema.optional(),
           roles: z.array(z.string().min(1)).default([]),
         }),
       )
@@ -306,6 +382,8 @@ export const GuardPolicySchemaV1 = z
     audit: AuditSchema,
     lock: LockSchema,
     session: SessionSchema,
+    http: HttpSchema,
+    auth: AuthSchema,
     telemetry: TelemetrySchema,
   })
   .meta({

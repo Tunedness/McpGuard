@@ -20,4 +20,8 @@ process.exitCode = await run({
   stderr: process.stderr,
   env: process.env,
   cwd: process.cwd(),
+  onShutdown: (listener) => {
+    process.once('SIGINT', listener);
+    process.once('SIGTERM', listener);
+  },
 });

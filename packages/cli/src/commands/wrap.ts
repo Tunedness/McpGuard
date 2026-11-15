@@ -174,7 +174,7 @@ interface DownstreamView {
 }
 
 /** A best-effort OTLP/HTTP JSON poster. A failed post is reported, never thrown. */
-function otlpPoster(
+export function otlpPoster(
   endpoint: string,
   headers: Record<string, string>,
 ): (payload: unknown) => Promise<void> {
@@ -189,7 +189,7 @@ function otlpPoster(
 }
 
 /** Parses `KEY=value,KEY2=value2` from the named environment variable. */
-function headersFrom(
+export function headersFrom(
   env: Readonly<Record<string, string | undefined>>,
   headersEnv: string | undefined,
 ): Record<string, string> {

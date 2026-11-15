@@ -22,6 +22,13 @@ export interface CliContext {
   readonly stderr: Writer;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly cwd: string;
+  /**
+   * Asks to be told when the process is asked to stop (SIGINT, SIGTERM). Only a
+   * command that runs until stopped calls it: registering a handler takes over
+   * the signal's default, which would stop `wrap` from dying on Ctrl-C. Absent
+   * in a context that has no process behind it.
+   */
+  readonly onShutdown?: ((listener: () => void) => void) | undefined;
 }
 
 /** Collects what was written, for tests. */

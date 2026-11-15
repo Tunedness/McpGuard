@@ -8,7 +8,13 @@
  * `content.ts` are the engine-facing half — where McpGuard rewrites the message
  * that AgentFuse only decides whether to forward.
  */
-export type { Bridge, BridgeOptions, Gates } from './bridge.js';
+export type {
+  Bridge,
+  BridgedRequest,
+  BridgeOptions,
+  Gates,
+  UpstreamPhase,
+} from './bridge.js';
 export { createBridge, PASSTHROUGH_RESULT } from './bridge.js';
 export type { ResultLike, TextBlockRef } from './content.js';
 export { extractText, replaceText } from './content.js';
@@ -22,15 +28,60 @@ export {
 } from './era.js';
 export type { GuardContext, GuardedResult } from './guard.js';
 export { blockedResult, guardCall, guardResource, guardResult } from './guard.js';
+export type { AuthResult, BearerAuthenticator, BearerToken } from './http-auth.js';
+export { createBearerAuthenticator, hashToken, unauthorizedResponse } from './http-auth.js';
+export type {
+  GatewayCallInput,
+  GatewayTiming,
+  HttpGateway,
+  HttpGatewayOptions,
+} from './http-gateway.js';
+export { createHttpGateway } from './http-gateway.js';
+export { GATEWAY_ERROR, jsonRpcError } from './http-response.js';
 export type { ListToolsOptions } from './list-tools.js';
 export { listAllTools, listStdioTools } from './list-tools.js';
+export type {
+  FetchHandler,
+  HttpEndpoint,
+  HttpEndpointOptions,
+  RequestContext,
+} from './node-http.js';
+export {
+  DEFAULT_MAX_BODY_BYTES,
+  DEFAULT_MAX_INFLIGHT,
+  startHttpEndpoint,
+} from './node-http.js';
 export {
   BAGGAGE_META_KEY,
   baggageEntry,
+  type ClientIdentity,
+  clientInfoOf,
   injectSession,
   type MetaBag,
   SESSION_BAGGAGE_KEY,
+  traceparentOf,
 } from './remap.js';
+export type {
+  LadderSource,
+  SessionKeyInput,
+  SessionKeyResolution,
+  SessionKeyResolverOptions,
+} from './session-ladder.js';
+export {
+  clientAddressKey,
+  isSupportedSessionKey,
+  MAX_SESSION_ID_LENGTH,
+  SessionKeyResolver,
+  traceIdOf,
+} from './session-ladder.js';
 export type { WrapHandle, WrapOptions } from './stdio-wrap.js';
-export { wrapStdioServer } from './stdio-wrap.js';
+export { assertRunnable, wrapStdioServer } from './stdio-wrap.js';
+export type { ConnectOptions, SharedUpstreamOptions, UpstreamTarget } from './upstream.js';
+export {
+  connectUpstream,
+  endUpstreamSession,
+  limitedFetch,
+  SharedUpstream,
+  UpstreamResponseTooLarge,
+} from './upstream.js';
 export { PROXY_VERSION } from './version.js';

@@ -186,7 +186,7 @@ function refusingServer(reason: Error): Server {
  * client that cannot read stderr. This looks the command up the way a shell
  * does, without running it.
  */
-function assertRunnable(command: string, env: Record<string, string | undefined>): void {
+export function assertRunnable(command: string, env: Record<string, string | undefined>): void {
   const windows = process.platform === 'win32';
   const extensions = windows ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
   const names =

@@ -15,6 +15,7 @@ import {
   type IdentityResolution,
   type SecurityEvent,
   type SecurityEventKind,
+  type SessionSource,
   type TelemetrySink,
   type ToolDefinition,
   toolKey,
@@ -38,19 +39,62 @@ import {
   type ToolScan,
 } from './manifest-gate.js';
 
+/**
+ * What the gates need to know about one call, beyond the call itself.
+ *
+ * A connection-bound host (`wrap`) knows this once and gives it to the gates when
+ * they are built. A host that serves many callers through one set of gates
+ * (`serve`) resolves it for each request and hands it in. The gate code is the
+ * same either way, so the three guards cannot fork between the two.
+ */
+export interface CallContext {
+  /** The session the call is attributed to, and how sure that answer is (ADR-006). */
+  readonly session: {
+    readonly id: string;
+    readonly source: SessionSource;
+    readonly exact: boolean;
+  };
+  /** Who the caller is, and which rung of the ADR-010 ladder said so. */
+  readonly identity: IdentityResolution;
+  /**
+   * Asks this caller's upstream for its whole tool list, for the manifest check
+   * before a first call. Absent, the gates use `RuntimeDeps.fetchTools`.
+   */
+  readonly listTools?: (() => Promise<readonly unknown[]>) | undefined;
+  /**
+   * The upstream connection this call is served by: whether its manifest has been
+   * checked is a fact about it, so a new connection owes the check. Absent, the
+   * host has one connection (`wrap`).
+   */
+  readonly connection?: string | undefined;
+  /**
+   * The server record a halt is held against (`servers.<name>`): the same for every
+   * session and both eras, so a mismatch seen on one stops them all and survives
+   * reconnects. Only `lock --accept` or a restart lifts it (ADR-005). Absent, the
+   * host has one server and one connection (`wrap`).
+   */
+  readonly upstream?: string | undefined;
+}
+
 /** What the host injects to build the gates. */
 export interface RuntimeDeps {
   readonly policy: GuardPolicy;
   readonly compiledPolicy: CompiledPolicy;
   readonly ruleset: CompiledRuleset;
   readonly serverName: string;
-  readonly sessionId: string;
-  readonly sessionExact: boolean;
+  /**
+   * The connection's own session, for a host that has one (`wrap`). Used when a
+   * gate is called without a {@link CallContext}; a host that always passes one
+   * leaves these out.
+   */
+  readonly sessionId?: string | undefined;
+  readonly sessionExact?: boolean | undefined;
   /**
    * Who the caller is, asked per call: the `clientInfo` rung is only known once
    * the client has initialised, so it cannot be fixed when the gates are built.
+   * Used when a gate is called without a {@link CallContext}.
    */
-  readonly resolveIdentity: () => IdentityResolution;
+  readonly resolveIdentity?: (() => IdentityResolution) | undefined;
   /** The key correlation tags are computed with; absent → no tags. */
   readonly correlationKey?: string | undefined;
   /** The chained audit writer, or undefined when auditing is off. */
@@ -124,7 +168,7 @@ export class CombinationHistory {
 
   /**
    * Forgets a session that has ended. Nothing in `wrap` calls it: its one session
-   * lives as long as the process. The HTTP gateway (Faz 18) will, when a session ends.
+   * lives as long as the process. A host that serves many sessions may.
    */
   forget(sessionId: string): void {
     this.sessions.delete(sessionId);
@@ -254,30 +298,79 @@ export function scanOptionsFor(
   };
 }
 
-/** The gates the bridge is wired with. */
-export function buildGates(deps: RuntimeDeps): Gates {
+/**
+ * The gates the bridge is wired with.
+ *
+ * Each takes the call's {@link CallContext} last. Without one, the connection's
+ * own (`RuntimeDeps.sessionId` and `resolveIdentity`) is used, which is how
+ * `wrap` calls them.
+ */
+export interface GuardGates {
+  onCall(
+    request: Parameters<Gates<CallContext>['onCall']>[0],
+    forward: Parameters<Gates<CallContext>['onCall']>[1],
+    context?: CallContext,
+  ): ReturnType<Gates<CallContext>['onCall']>;
+  onList(
+    request: Parameters<Gates<CallContext>['onList']>[0],
+    forward: Parameters<Gates<CallContext>['onList']>[1],
+    context?: CallContext,
+  ): ReturnType<Gates<CallContext>['onList']>;
+  onRead(
+    request: Parameters<Gates<CallContext>['onRead']>[0],
+    forward: Parameters<Gates<CallContext>['onRead']>[1],
+    context?: CallContext,
+  ): ReturnType<Gates<CallContext>['onRead']>;
+}
+
+/** Builds the gates for one server. */
+export function buildGates(deps: RuntimeDeps): GuardGates {
   const enforce = deps.policy.mode === 'enforce';
 
+  /** The call's context, or the connection's own when the host passed none. */
+  const contextOf = (given: CallContext | undefined): CallContext => {
+    if (given !== undefined) return given;
+    if (deps.sessionId === undefined || deps.resolveIdentity === undefined) {
+      throw new Error('a gate was called without a call context and has no connection of its own');
+    }
+    return {
+      session: { id: deps.sessionId, source: 'connection', exact: deps.sessionExact ?? true },
+      identity: deps.resolveIdentity(),
+    };
+  };
+
+  /** A stderr diagnostic, always carrying the session it is about and how it was resolved. */
+  const notify = (call: CallContext, event: string, detail: Record<string, unknown>): void => {
+    deps.onEvent(event, {
+      session: call.session.id,
+      sessionSource: call.session.source,
+      sessionExact: call.session.exact,
+      ...detail,
+    });
+  };
+
   const emit = (
+    call: CallContext,
     kind: SecurityEventKind,
     type: SecurityEvent['type'],
     toolName: string | undefined,
     action: string,
     score: number | undefined,
     evidence: readonly string[],
-    callerIdentity: IdentityResolution,
   ): void => {
     deps.telemetry.emit({
       type,
       kind,
       at: deps.clock(),
-      sessionId: deps.sessionId,
+      sessionId: call.session.id,
       serverName: deps.serverName,
       toolName,
       score,
       action,
       evidence,
-      callerIdentity,
+      callerIdentity: call.identity,
+      sessionSource: call.session.source,
+      sessionExact: call.session.exact,
     });
   };
 
@@ -295,6 +388,7 @@ export function buildGates(deps: RuntimeDeps): Gates {
   });
 
   const record = (
+    call: CallContext,
     kind: 'tool_call' | 'resource_read' | 'tool_list',
     toolName: string | undefined,
     action: string,
@@ -303,7 +397,6 @@ export function buildGates(deps: RuntimeDeps): Gates {
     piiKinds: readonly string[],
     masked: string,
     raw: string,
-    callerIdentity: IdentityResolution,
   ): void => {
     // The writer owns the hash chain — it holds the running head and the
     // sequence — so the runtime only supplies the fields and the raw content the
@@ -311,7 +404,7 @@ export function buildGates(deps: RuntimeDeps): Gates {
     deps.audit?.record(
       {
         at: deps.clock(),
-        sessionId: deps.sessionId,
+        sessionId: call.session.id,
         kind,
         serverName: deps.serverName,
         toolName,
@@ -320,8 +413,9 @@ export function buildGates(deps: RuntimeDeps): Gates {
         findings,
         piiKinds,
         maskedContent: masked.slice(0, 4_096),
-        sessionExact: deps.sessionExact,
-        callerIdentity,
+        sessionExact: call.session.exact,
+        sessionSource: call.session.source,
+        callerIdentity: call.identity,
       },
       raw,
     );
@@ -349,8 +443,9 @@ export function buildGates(deps: RuntimeDeps): Gates {
    *
    * A refused call is not remembered, because it did not happen.
    */
-  const checkCombinations = (toolName: string, caller: IdentityResolution): boolean => {
+  const checkCombinations = (toolName: string, call: CallContext): boolean => {
     if (history === undefined) return false;
+    const caller = call.identity;
     const now = deps.clock();
     if (toolName.length > MAX_TRACKED_NAME_LENGTH) {
       // A name this long cannot be remembered, and clipping it would let a
@@ -358,7 +453,7 @@ export function buildGates(deps: RuntimeDeps): Gates {
       // done: refused if one of them denies, otherwise let through and reported.
       const refused = enforce && rules.some((combination) => combination.rule.action === 'deny');
       const action = refused ? 'deny' : 'flag';
-      deps.onEvent('combination_detected', {
+      notify(call, 'combination_detected', {
         tool: toolName.slice(0, MAX_DIFF_NAME_LENGTH),
         rule: 'combination.name_too_long',
         action,
@@ -368,15 +463,16 @@ export function buildGates(deps: RuntimeDeps): Gates {
         identityExact: caller.exact,
       });
       emit(
+        call,
         'combination_detected',
         'policy_decision',
         toolName.slice(0, MAX_DIFF_NAME_LENGTH),
         action,
         undefined,
         ['combination.name_too_long'],
-        caller,
       );
       record(
+        call,
         'tool_call',
         toolName.slice(0, MAX_DIFF_NAME_LENGTH),
         action,
@@ -385,7 +481,6 @@ export function buildGates(deps: RuntimeDeps): Gates {
         [],
         JSON.stringify({ reason: 'name_too_long', length: toolName.length }),
         '',
-        caller,
       );
       return refused;
     }
@@ -398,11 +493,11 @@ export function buildGates(deps: RuntimeDeps): Gates {
     };
     const hits = evaluateCombinations(
       deps.compiledPolicy,
-      [mark, ...history.recent(deps.sessionId, now)],
+      [mark, ...history.recent(call.session.id, now)],
       now,
     ).filter((hit) => hit.evidence.includes(mark));
     if (hits.length === 0) {
-      history.record(deps.sessionId, mark);
+      history.record(call.session.id, mark);
       return false;
     }
     const refused = enforce && hits.some((hit) => hit.action === 'deny');
@@ -413,7 +508,7 @@ export function buildGates(deps: RuntimeDeps): Gates {
       );
     for (const hit of hits) {
       const action = enforce && hit.action === 'deny' ? 'deny' : 'flag';
-      deps.onEvent('combination_detected', {
+      notify(call, 'combination_detected', {
         tool: toolName,
         rule: hit.id,
         action,
@@ -423,18 +518,14 @@ export function buildGates(deps: RuntimeDeps): Gates {
         identitySource: caller.source,
         identityExact: caller.exact,
       });
-      emit(
-        'combination_detected',
-        'policy_decision',
-        toolName,
-        action,
-        undefined,
-        [hit.id, ...matched(hit.evidence)],
-        caller,
-      );
+      emit(call, 'combination_detected', 'policy_decision', toolName, action, undefined, [
+        hit.id,
+        ...matched(hit.evidence),
+      ]);
     }
     // Rule ids and the tool names that satisfied them; never what the calls carried (ADR-004).
     record(
+      call,
       'tool_call',
       toolName,
       refused ? 'deny' : 'flag',
@@ -445,22 +536,22 @@ export function buildGates(deps: RuntimeDeps): Gates {
         combinations: hits.map((hit) => ({ rule: hit.id, matched: matched(hit.evidence) })),
       }),
       '',
-      caller,
     );
-    if (!refused) history.record(deps.sessionId, mark);
+    if (!refused) history.record(call.session.id, mark);
     return refused;
   };
 
-  const reportManifest = (event: ManifestEvent): void => {
-    const caller = deps.resolveIdentity();
+  const reportManifest = (event: ManifestEvent, given: CallContext | undefined): void => {
+    const call = contextOf(given);
     switch (event.kind) {
       case 'pinned':
-        deps.onEvent('manifest_pinned', {
+        notify(call, 'manifest_pinned', {
           server: deps.serverName,
           tools: event.toolCount,
           lock: deps.lock?.path,
         });
         record(
+          call,
           'tool_list',
           undefined,
           'allow',
@@ -469,11 +560,10 @@ export function buildGates(deps: RuntimeDeps): Gates {
           [],
           `pinned ${event.toolCount}`,
           '',
-          caller,
         );
         return;
       case 'description_flagged':
-        deps.onEvent('injection_detected', {
+        notify(call, 'injection_detected', {
           surface: 'tool_description',
           tool: event.tool,
           action: 'flag',
@@ -481,15 +571,15 @@ export function buildGates(deps: RuntimeDeps): Gates {
           rules: event.ruleIds,
         });
         emit(
+          call,
           'injection_detected',
           'security_event',
           event.tool,
           'flag',
           event.score,
           event.ruleIds,
-          caller,
         );
-        record('tool_list', event.tool, 'flag', event.score, event.ruleIds, [], '', '', caller);
+        record(call, 'tool_list', event.tool, 'flag', event.score, event.ruleIds, [], '', '');
         return;
       case 'mismatch': {
         const diff = event.diff;
@@ -513,17 +603,18 @@ export function buildGates(deps: RuntimeDeps): Gates {
           detail: event.detail,
           lock: deps.lock?.path,
         };
-        deps.onEvent('manifest_mismatch', detail);
+        notify(call, 'manifest_mismatch', detail);
         emit(
+          call,
           'manifest_mismatch',
           'security_event',
           undefined,
           event.action,
           undefined,
           evidence,
-          caller,
         );
         record(
+          call,
           'tool_list',
           undefined,
           event.action === 'halt' ? 'block' : 'flag',
@@ -532,7 +623,6 @@ export function buildGates(deps: RuntimeDeps): Gates {
           [],
           JSON.stringify({ altered: detail.altered, added: detail.added, removed: detail.removed }),
           '',
-          caller,
         );
         return;
       }
@@ -541,33 +631,43 @@ export function buildGates(deps: RuntimeDeps): Gates {
 
   const manifest =
     deps.lock !== undefined && deps.policy.lock.enabled
-      ? createManifestGate({
+      ? createManifestGate<CallContext | undefined>({
           serverName: deps.serverName,
           onFirstUse: deps.policy.lock.on_first_use,
           onMismatch: deps.policy.lock.on_mismatch,
           store: deps.lock,
           scanTool,
           report: reportManifest,
-          fetchTools: deps.fetchTools,
+          // Two callers paging through the list at once must not read each
+          // other's pages as their own; one walk per session.
+          walkKey: (given) => given?.session.id ?? '',
+          stateKey: (given) => given?.upstream ?? given?.connection ?? '',
+          connectionKey: (given) => given?.connection ?? '',
+          fetchTools: async (given) => {
+            const listTools = given?.listTools ?? deps.fetchTools;
+            if (listTools === undefined) throw new Error('no way to list the upstream tools');
+            return listTools();
+          },
         })
       : undefined;
 
   return {
-    onCall: async (request, forward) => {
+    onCall: async (request, forward, given) => {
+      const call = contextOf(given);
       const toolName = String(request.params?.name ?? 'unknown');
       // A list the gate refused leaves no open door: the call is refused too,
       // until a later `tools/list` passes. Not downgraded in observe mode, for
       // the same reason the list is not: `lock.on_mismatch` is the operator's
       // explicit word on what a changed manifest means.
-      const refused = await manifest?.callGuard();
+      const refused = await manifest?.callGuard(call);
       if (refused !== undefined) {
-        const caller = deps.resolveIdentity();
-        deps.onEvent('manifest_call_refused', {
+        notify(call, 'manifest_call_refused', {
           server: deps.serverName,
           tool: toolName,
           reason: refused.reason,
         });
         record(
+          call,
           'tool_call',
           toolName,
           'deny',
@@ -576,32 +676,26 @@ export function buildGates(deps: RuntimeDeps): Gates {
           [],
           '',
           '',
-          caller,
         );
         throw refused;
       }
       // The caller's identity, not the session id: a ULID is minted per
       // connection and no role mapping can ever name it (ADR-010).
-      const caller = deps.resolveIdentity();
+      const caller = call.identity;
       const access = guardCall(contextFor(toolName), deps.serverName, toolName, caller.identity);
       if (access.action === 'deny' && enforce) {
-        deps.onEvent('access_denied', {
+        notify(call, 'access_denied', {
           tool: toolName,
           rule: access.matchedRule,
           identity: caller.identity,
           identitySource: caller.source,
           identityExact: caller.exact,
         });
-        emit(
-          'access_denied',
-          'policy_decision',
-          toolName,
-          'deny',
-          undefined,
-          [access.matchedRule ?? ''],
-          caller,
-        );
+        emit(call, 'access_denied', 'policy_decision', toolName, 'deny', undefined, [
+          access.matchedRule ?? '',
+        ]);
         record(
+          call,
           'tool_call',
           toolName,
           'deny',
@@ -610,11 +704,10 @@ export function buildGates(deps: RuntimeDeps): Gates {
           [],
           '',
           '',
-          caller,
         );
         return blockedResult('deny', 0, deps.ruleset.rulesetVersion) as never;
       }
-      if (checkCombinations(toolName, caller)) {
+      if (checkCombinations(toolName, call)) {
         return blockedResult('deny', 0, deps.ruleset.rulesetVersion) as never;
       }
       const upstream = await forward();
@@ -623,21 +716,22 @@ export function buildGates(deps: RuntimeDeps): Gates {
       const piiKinds = guarded.verdicts.flatMap((v) => v.piiFindings.map((f) => f.kind));
       const score = Math.max(0, ...guarded.verdicts.map((v) => v.score));
       if (guarded.action !== 'allow') {
-        deps.onEvent('injection_detected', { tool: toolName, action: guarded.action, score });
+        notify(call, 'injection_detected', { tool: toolName, action: guarded.action, score });
         emit(
+          call,
           'injection_detected',
           'security_event',
           toolName,
           guarded.action,
           score,
           findings,
-          caller,
         );
       }
       if (piiKinds.length > 0)
-        emit('pii_masked', 'security_event', toolName, guarded.action, undefined, piiKinds, caller);
+        emit(call, 'pii_masked', 'security_event', toolName, guarded.action, undefined, piiKinds);
       const maskedText = guarded.verdicts.map((v) => v.text).join('\n');
       record(
+        call,
         'tool_call',
         toolName,
         guarded.action,
@@ -646,27 +740,27 @@ export function buildGates(deps: RuntimeDeps): Gates {
         piiKinds,
         maskedText,
         rawTextOf(upstream),
-        caller,
       );
       if (guarded.action === 'block') {
         return blockedResult('block', findings.length, deps.ruleset.rulesetVersion) as never;
       }
       return guarded.result as never;
     },
-    onList: async (request, forward) =>
-      manifest !== undefined ? manifest.onList(request, forward) : forward(),
-    onRead: async (request, forward) => {
+    onList: async (request, forward, given) =>
+      manifest !== undefined ? manifest.onList(request, forward, contextOf(given)) : forward(),
+    onRead: async (request, forward, given) => {
+      const call = contextOf(given);
       const uri = String(request.params?.uri ?? 'unknown');
-      const caller = deps.resolveIdentity();
       const upstream = await forward();
       const guarded = guardResource(contextFor(uri), deps.serverName, uri, upstream);
       const findings = guarded.verdicts.flatMap((v) => v.findings.map((f) => f.ruleId));
       const piiKinds = guarded.verdicts.flatMap((v) => v.piiFindings.map((f) => f.kind));
       const score = Math.max(0, ...guarded.verdicts.map((v) => v.score));
       if (guarded.action !== 'allow') {
-        deps.onEvent('injection_detected', { resource: uri, action: guarded.action, score });
+        notify(call, 'injection_detected', { resource: uri, action: guarded.action, score });
       }
       record(
+        call,
         'resource_read',
         uri,
         guarded.action,
@@ -675,7 +769,6 @@ export function buildGates(deps: RuntimeDeps): Gates {
         piiKinds,
         guarded.verdicts.map((v) => v.text).join('\n'),
         rawTextOf(upstream),
-        caller,
       );
       if (guarded.action === 'block') {
         return blockedResult('block', findings.length, deps.ruleset.rulesetVersion) as never;

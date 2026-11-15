@@ -17,7 +17,7 @@ anlatan baseline changeset'i 0.1.0 girdisi olarak CHANGELOG'da duruyor, 0.1.1
 girdisi Faz 14, 15, 25, 26 düzeltmelerini ve yeniden adlandırmayı anlatıyor.
 
 Ürün durumu: Faz 0–10 ve 12 bitti; Faz 11 (HTTP gateway)
-bilinçle P1'e bırakıldı. `mcpguard wrap -- <sunucu>` gerçek MCP protokolüyle
+bilinçle P1'e bırakıldı ve çekirdeği Faz 18'de geldi. `mcpguard wrap -- <sunucu>` gerçek MCP protokolüyle
 doğrulanmış tam korumalı proxy: deterministik injection taraması (700 öğelik
 korpusta %100 recall / %0 FP, in-sample), PII maskeleme, erişim denetimi,
 manifest sabitleme, hash zincirli audit, opsiyonel OTLP telemetri. Son kayıtlı
@@ -46,6 +46,14 @@ Faz 25 bölümünde.
 digest'li iki ruleset farklı karar verebiliyordu (ADR-009 madde 2). Düzeltildi ve
 testle kilitli; ayrıntı aşağıdaki Faz 26 bölümünde.
 
+**Korumalı HTTP gateway çekirdeği (Faz 18) bitti.** `mcpguard serve` tek upstream
+için `wrap`'in üç kapısını (`tools/call`, `resources/read`, `tools/list`) aynı
+`runtime.ts` koduyla HTTP üzerinden sunuyor; iki era'yı da (legacy session'lı,
+modern session'sız) çeviri yapmadan ayrı bacaklar olarak taşıyor. Gelen oturum
+ADR-006 merdiveniyle çözülüyor, kimlik bearer token'dan geliyor, loopback
+varsayılan. Spike sonuçları ve sınırlar aşağıdaki Faz 18 bölümünde. Çoklu upstream
+ve havuz (`/mcp/<ad>` yönlendirmesi, Faz 19) henüz yok.
+
 Sıradaki iş:
 
 1. **Yayın düğmesi** — kullanıcının. Adlar kararlı (`@tunedness/mcpguard` +
@@ -53,7 +61,7 @@ Sıradaki iş:
    paketler tarball'dan kurulup koşturuluyor (`npm run pack:smoke`). Kalan:
    `release.yml`'in `publish` adımının elle tetiklenmesi.
 2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
-3. Diğer P1'ler: korumalı `serve` gateway, sağlık verisi tanıyıcıları, Kademe 2
+3. Diğer P1'ler: `serve`'ün çoklu upstream ve havuzu (Faz 19), sağlık verisi tanıyıcıları, Kademe 2
    SLM hakem, checkpoint syslog sink'i, trace context yayımı.
 
 Ayrıntı için bkz. [Faz 12 — Devralan kişiye](#faz-12--dokümanlar-ve-v010-bitti).
@@ -828,8 +836,20 @@ packages/cli/src/testing/fixtures/shifty-server.mjs   manifest'i değişen test 
   (PRD Faz 0 eki "bulgular kilide yazılır" diyor). `findings` hash'e girmez.
 - **Sayfalı `tools/list`:** bir sayfa katalogun tamamı sayılmaz; `removed` yalnız
   son sayfada, ilk sayfa görüldüyse hesaplanır; TOFU yazımı son sayfada olur.
-- **Kapının açık bırakmaması:** liste reddedilince `tools/call` de reddedilir
-  (sonraki geçen liste kapıyı açar). `require` + girdi yokken liste hiç istenmese
+- **Kapının açık bırakmaması:** liste reddedilince `tools/call` de reddedilir.
+  **Halt yapışkandır** (ADR-005 eki, Faz 18'de eklendi): pin'le eşleşen sonraki bir
+  liste halt'ı kaldırmaz, liste de çağrı da reddedilmeye devam eder; halt'ı yalnız
+  pin'i değiştiren `lock --accept` (ya da sürecin yeniden başlatılması) kaldırır.
+  Kaldırıldığında upstream çağrıdan önce yeniden doğrulanır. Halt'ın birimi
+  politikadaki sunucu kaydıdır (`servers.<ad>`): `wrap`'te tek sunucu; `serve`'de her
+  iki era ve her oturum için tek durum. Bir oturumun upstream bağlantısında görülen
+  uyumsuzluk o sunucunun bütün oturumlarını, sonradan açılanlar dahil, durdurur;
+  modern bacakta paylaşılan `Client` yeniden bağlansa da korunur. Hiçbir oturum onu
+  kendi listesiyle açamaz.
+  "Doğrulandı" ise bağlantı başınadır: yeni bir oturum ya da yeniden kurulan
+  paylaşılan bağlantı, çağrıdan önce kontrolü yeniden yapar. Okunamayan kilit
+  `halt` politikasında kontrolsüz çağrıyı da geçirmez (bu, `wrap`'te davranış
+  değişikliğidir). `require` + girdi yokken liste hiç istenmese
   bile çağrı reddedilir. Pin varken ve oturumda henüz doğrulanmış liste yokken
   ilk `tools/call`'dan önce kapı upstream'den kendisi `tools/list` çeker ve aynı
   karşılaştırmayı yapar (önbellekli kataloğa güvenen istemci kapıyı atlayamaz);
@@ -1052,3 +1072,88 @@ motorunu reddeder ve **her paketin testi kırılır**. Her minor artışında
 `engineRange` (ve `detect`/`proxy` testlerindeki sabit `'^0.1.0'` fixture'ları)
 birlikte güncellenmeli. `engineRange` digest'te değil (Faz 26), kural verisi ve
 sonuçlar değişmedi.
+
+## Faz 18 — korumalı HTTP gateway çekirdeği (`mcpguard serve`) (bitti)
+
+ADR-011'in seçilen seti. `serve` tek bir upstream'i, `wrap`'in kapılarının aynısıyla
+HTTP üzerinden sunar. Çoklu upstream, `/mcp/<ad>` yönlendirmesinin birleştirilmesi
+ve bağlantı havuzu Faz 19'a ait; burada yol `/mcp/<ad>` biçiminde yalnız tek ad için
+çalışır.
+
+```
+packages/proxy/src/http-gateway.ts     createHttpGateway: iki era'yı ayırır, kapıları çalıştırır
+packages/proxy/src/node-http.ts        Node HTTP ucu: 413, 503, soket adresi
+packages/proxy/src/http-auth.ts        bearer token (sha256 + timingSafeEqual)
+packages/proxy/src/session-ladder.ts   ADR-006 merdiveni
+packages/proxy/src/upstream.ts         upstream bağlantısı, paylaşılan bağlantı, boyut sınırı
+packages/proxy/src/bridge.ts           Gates<C>: çağrı bağlamı genelleştirildi
+packages/cli/src/runtime.ts            CallContext; wrap ve serve aynı kapılar
+packages/cli/src/commands/serve*.ts    serve komutu
+packages/core/src/policy/schema.ts     servers.<ad>.upstream, http, auth.tokens, session.max_sessions
+bench/src/latency/http.ts              HTTP gecikme benchmark'ı
+```
+
+### Spike — ADR-011 madde 2 (kod yazılmadan önce koşturuldu)
+
+- **V1 — DOĞRU.** `createMcpHandler(factory, { legacy: 'reject' })` modern era'yı
+  sunuyor; `isLegacyRequest` trafiği ayırıyor; legacy bacak istek başına değil
+  session başına bir `WebStandardStreamableHTTPServerTransport` ile gidiyor. B planına
+  (`PerRequestHTTPServerTransport` + `classifyInboundRequest`) gerek kalmadı. Gerçek
+  soketlerle, SDK'nın kendi iki era istemcisiyle, `http-gateway.test.ts`'te kilitli.
+- **V2 — YANLIŞ.** Upstream modern bir `input_required` (multi-round-trip) döndürdüğünde
+  paylaşılan upstream `Client` onu kendisi karşılamak zorunda kalır; elinde bunun için
+  handler yok ve downstream'in sorulabileceği bir kanal yok. Çağrı
+  `Cannot fulfil input request '...'` ile hata verir. ADR'nin öngördüğü gibi
+  "proxy'den geçmez" diye belgelenir ve `http-gateway.test.ts`'te testle sabitlenir
+  (`does not carry a modern multi-round-trip result`). **Bu, ADR-008'deki sampling
+  sınırıyla aynı listede:** sunucudan istemciye giden bir alışveriş taranmıyor, burada
+  ayrıca taşınmıyor da.
+
+### Davranış
+
+- **Era.** Her istek kendi era'sında sunulur; era uyuşmazlığı çeviri değil, SDK
+  biçiminde `-32022` 400 yanıtıdır (ADR-011). Legacy upstream session başına ayrı
+  `Client`, modern upstream tek paylaşılan `Client`.
+- **Oturum.** Merdiven: `traceparent` → baggage `tunedness.session-id` →
+  `Mcp-Session-Id` (legacy) → `clientInfo` + adres özeti. Kaynak ve `exact`
+  audit kaydına (`sessionSource`, `sessionExact`) yazılır; `tunedness.session-id`
+  upstream `_meta`'ya enjekte edilir. Gateway kendi `Mcp-Session-Id`'sini üretir
+  (UUID; upstream'inki istemciye hiç gitmez).
+- **Kimlik.** `auth.tokens` (yalnız `token_sha256` saklanır) → ADR-010 çözüm biçimi,
+  kaynak `token`. Tüm girişler sabit sürede karşılaştırılır.
+- **Bind.** Varsayılan `127.0.0.1:8766`. Loopback dışı bind, `auth.tokens` ve
+  `http.allowed_hosts` olmadan reddedilir. Host/Origin SDK yardımcılarıyla doğrulanır,
+  CORS yok. Düz HTTP uyarısı `serve_started` satırında.
+- **Sınırlar.** `max_body_bytes` (413), `max_inflight` (503 + `Retry-After`),
+  `max_upstream_connections` (503), upstream yanıt boyutu sınırı, boşta kalan
+  session'lar için zaman aşımı süpürmesi, upstream kopmasında geri çekilme.
+- **Politika şeması.** `servers.<ad>.upstream` (`url` ya da `command`+`args`), `http`,
+  `auth.tokens`, `session.max_sessions`, `max_upstream_connections` eklendi;
+  `guardpolicy.v1.schema.json` yeniden üretildi.
+
+### Ölçülen — gecikme (PRD §6)
+
+`npm run bench:latency:http`, `bench/latency/results.md`'nin "HTTP gateway" bölümü.
+Rakam gateway'in **kendi** eklediği süredir: isteğin gelişinden upstream çağrısının
+çıkışına, upstream yanıtının gelişinden yanıtın yazılmasının bitişine; gateway içinde
+ölçülür, süreçler arası loopback gürültüsü içinde değil. Referans iş yükünde
+(1 KB, scan benchmark'ının referansı) iki era'da da p95 yaklaşık 1,2-2 ms; kapı
+< 20 ms ve gevşetilmedi (aşılırsa komut sıfırdan farklı kodla çıkar). Maliyet
+büyüklükle artar (64 KB'ta yaklaşık 16 ms, scan eğrisiyle aynı); gateway'in kendi payı
+her boyutta ~0,1 ms. Uçtan uca fark ayrı bir sağlama olarak raporlanır ve kapı
+değildir.
+
+**Çekince.** Benchmark `runtime.ts`'in `tools/call` yolundaki motoru (erişim kararı,
+PII maskeli tarama, senkron hash zincirli audit) koşturur; CLI bunu export etmediği
+için kombinasyon ve manifest kayıtları onun dışındadır.
+
+### Bilinmesi gerekenler
+
+- `serve` upstream'i komut satırından alır (`--upstream <url>` ya da `-- komut`);
+  politikadaki `servers.<ad>.upstream` yalnız şemada tanımlı, çoklu upstream (Faz 19)
+  onu kullanacak. İkisi çelişirse hata.
+- `max_sessions` yalnız adres-bağlama tablosunu sınırlar.
+- `wrap` davranışı değişmedi: `wrap-process.test.ts` dokunulmadan geçer. `runtime.ts`,
+  `manifest-gate.ts` ve `stdio-wrap.ts` fazın dosya listesinin dışında, çağrı bağlamını
+  genelleştirmek için dokunuldu (davranışsız).
+- Modern MRTR taşınmaz (V2). `README`'deki "`serve` çalışmayı reddeder" satırı eski.

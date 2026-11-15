@@ -96,6 +96,35 @@ describe('caller identity on a record', () => {
   });
 });
 
+describe('session source on a record (ADR-006)', () => {
+  it('is part of the hashed body, so a guess cannot be rewritten as an exact answer', () => {
+    const record = buildRecord(
+      0,
+      GENESIS_HASH,
+      { ...fields(0), sessionSource: 'client-address', sessionExact: false },
+      'raw',
+      'k',
+    );
+    expect(verifyChain([record]).ok).toBe(true);
+    expect(verifyChain([{ ...record, sessionSource: 'traceparent' }]).ok).toBe(false);
+    expect(verifyChain([{ ...record, sessionExact: true }]).ok).toBe(false);
+  });
+
+  it('leaves a record written before the field existed verifiable, alongside one that has it', () => {
+    const before = buildRecord(0, GENESIS_HASH, fields(0), 'raw', 'k');
+    expect('sessionSource' in before).toBe(false);
+    const after = buildRecord(
+      1,
+      before.hash,
+      { ...fields(1), sessionSource: 'connection' },
+      'raw',
+      'k',
+    );
+    const read = JSON.parse(JSON.stringify([before, after])) as AuditRecord[];
+    expect(verifyChain(read).ok).toBe(true);
+  });
+});
+
 describe('verifyChain', () => {
   it('accepts an intact chain', () => {
     expect(verifyChain(chain(5)).ok).toBe(true);

@@ -21,8 +21,27 @@ export type SecurityEventKind =
   | 'scan_degraded'
   | 'audit_checkpoint';
 
-/** Which rung of the identity ladder answered (ADR-010). */
-export type IdentitySource = 'flag' | 'env' | 'client_info' | 'none';
+/**
+ * Which rung of the identity ladder answered (ADR-010, ADR-011).
+ *
+ * `token` is the HTTP gateway's: a static bearer token mapped to an identity in
+ * the policy. It is exact, because the operator wrote the mapping.
+ */
+export type IdentitySource = 'flag' | 'env' | 'client_info' | 'token' | 'none';
+
+/**
+ * Which rung of the session ladder answered (ADR-006).
+ *
+ * `connection` is `wrap`'s: one child process is one connection is one session.
+ * The other four are the HTTP ladder, top to bottom; only `client-address` is a
+ * guess.
+ */
+export type SessionSource =
+  | 'traceparent'
+  | 'baggage'
+  | 'mcp-session-id'
+  | 'client-address'
+  | 'connection';
 
 /**
  * Who the caller was taken to be, and how sure the answer is (ADR-010).
@@ -56,4 +75,7 @@ export interface SecurityEvent {
   readonly evidence: readonly string[];
   /** The resolved caller identity, when the event is about a call (ADR-010). */
   readonly callerIdentity?: IdentityResolution | undefined;
+  /** Which rung resolved `sessionId`, and whether that answer is exact (ADR-006). */
+  readonly sessionSource?: SessionSource | undefined;
+  readonly sessionExact?: boolean | undefined;
 }

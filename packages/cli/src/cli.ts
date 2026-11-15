@@ -12,6 +12,7 @@ import { runAudit } from './commands/audit.js';
 import { runInit } from './commands/init.js';
 import { runLock } from './commands/lock.js';
 import { runScan } from './commands/scan.js';
+import { runServe } from './commands/serve.js';
 import { runValidate } from './commands/validate.js';
 import { runWrap } from './commands/wrap.js';
 import { CliError, EXIT, formatCliError } from './errors.js';
@@ -34,7 +35,7 @@ export function usage(): string[] {
     '',
     'Commands:',
     '  wrap      Guard one stdio MCP server: mcpguard wrap -- <server-cmd>',
-    '  serve     Guarded HTTP gateway in front of N servers',
+    '  serve     Guarded HTTP gateway: mcpguard serve -- <server-cmd> | --upstream <url>',
     '  init      Write a starter guardpolicy.yaml',
     '  validate  Check a policy file and print what it resolves to',
     '  lock      Inspect, create or update guardlock.json',
@@ -86,10 +87,7 @@ async function dispatch(context: CliContext): Promise<number> {
     case 'wrap':
       return runWrap(context, rest);
     case 'serve':
-      throw new CliError('serve (the guarded HTTP gateway) is not built yet', {
-        exitCode: EXIT.usage,
-        hints: ['It arrives in phase 11; use `wrap` for a stdio server today.'],
-      });
+      return runServe(context, rest);
     case 'init':
       return runInit(context, rest);
     case 'validate':

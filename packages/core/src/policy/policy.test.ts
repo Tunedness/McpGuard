@@ -368,3 +368,99 @@ describe('compilePolicy', () => {
     expect([...policy.rolesFor('alice')]).toEqual(['admin']);
   });
 });
+
+describe('the gateway fields (ADR-011)', () => {
+  const sha = 'a'.repeat(64);
+
+  it('default to conservative values, so an old policy is still a complete one', () => {
+    const policy = defaultPolicy();
+    expect(policy.http).toEqual({
+      max_body_bytes: 4_194_304,
+      max_upstream_response_bytes: 16_777_216,
+      max_inflight: 256,
+      allowed_hosts: [],
+      allowed_origins: [],
+    });
+    expect(policy.auth.tokens).toEqual([]);
+    expect(policy.session.max_sessions).toBe(1024);
+    expect(policy.session.max_upstream_connections).toBe(32);
+    expect(policy.session.key).toBe('auto');
+  });
+
+  it('read a server upstream as a URL or as a command', () => {
+    const policy = parsePolicy({
+      version: 1,
+      servers: {
+        docs: { upstream: { url: 'https://mcp.example.com/mcp' } },
+        files: { upstream: { command: 'npx', args: ['-y', 'files-mcp'] } },
+        bare: { upstream: { command: 'node' } },
+        none: {},
+      },
+    });
+    expect(policy.servers.docs?.upstream).toEqual({ url: 'https://mcp.example.com/mcp' });
+    expect(policy.servers.files?.upstream).toEqual({ command: 'npx', args: ['-y', 'files-mcp'] });
+    expect(policy.servers.bare?.upstream).toEqual({ command: 'node', args: [] });
+    expect(policy.servers.none?.upstream).toBeUndefined();
+  });
+
+  it.each([
+    ['a non-http URL', { url: 'file:///etc/passwd' }],
+    ['a URL and a command together', { url: 'https://x.example/mcp', command: 'node' }],
+    ['neither', {}],
+    ['an unknown key', { url: 'https://x.example/mcp', headers: {} }],
+    ['an empty command', { command: '' }],
+  ])('refuse an upstream with %s', (_label, upstream) => {
+    expect(() => parsePolicy({ version: 1, servers: { s: { upstream } } })).toThrow(
+      PolicyValidationError,
+    );
+  });
+
+  it('keep a token as its hash, and refuse anything that is not one', () => {
+    const policy = parsePolicy({
+      version: 1,
+      auth: { tokens: [{ identity: 'alice', token_sha256: sha }] },
+    });
+    expect(policy.auth.tokens).toEqual([{ identity: 'alice', token_sha256: sha }]);
+    for (const bad of ['secret-token', 'A'.repeat(64), 'a'.repeat(63), '']) {
+      expect(() =>
+        parsePolicy({ version: 1, auth: { tokens: [{ identity: 'x', token_sha256: bad }] } }),
+      ).toThrow(PolicyValidationError);
+    }
+    expect(() =>
+      parsePolicy({ version: 1, auth: { tokens: [{ identity: 'x', token: 'plain' }] } }),
+    ).toThrow(PolicyValidationError);
+  });
+
+  it('refuse the same token listed twice, and allow one identity several tokens', () => {
+    expect(() =>
+      parsePolicy({
+        version: 1,
+        auth: {
+          tokens: [
+            { identity: 'a', token_sha256: sha },
+            { identity: 'b', token_sha256: sha },
+          ],
+        },
+      }),
+    ).toThrow(/appears twice/);
+    const rotated = parsePolicy({
+      version: 1,
+      auth: {
+        tokens: [
+          { identity: 'a', token_sha256: sha },
+          { identity: 'a', token_sha256: 'b'.repeat(64) },
+        ],
+      },
+    });
+    expect(rotated.auth.tokens).toHaveLength(2);
+  });
+
+  it('refuse a limit that is zero or negative', () => {
+    for (const http of [{ max_body_bytes: 0 }, { max_inflight: -1 }]) {
+      expect(() => parsePolicy({ version: 1, http })).toThrow(PolicyValidationError);
+    }
+    expect(() => parsePolicy({ version: 1, session: { max_upstream_connections: 0 } })).toThrow(
+      PolicyValidationError,
+    );
+  });
+});

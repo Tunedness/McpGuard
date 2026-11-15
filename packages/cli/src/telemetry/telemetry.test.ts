@@ -75,6 +75,34 @@ describe('toLogRecord caller identity', () => {
   });
 });
 
+describe('toLogRecord session attribution', () => {
+  const attrsOf = (over: Partial<SecurityEvent>) =>
+    toLogRecord(event(over), 'mcpguard').attributes as {
+      key: string;
+      value: Record<string, unknown>;
+    }[];
+
+  it('says which rung resolved the session and whether that is exact (ADR-006)', () => {
+    const guessed = attrsOf({ sessionSource: 'client-address', sessionExact: false });
+    expect(guessed.find((a) => a.key === 'tunedness.session_source')?.value).toEqual({
+      stringValue: 'client-address',
+    });
+    expect(guessed.find((a) => a.key === 'tunedness.session_exact')?.value).toEqual({
+      stringValue: 'false',
+    });
+    const token = attrsOf({ callerIdentity: { identity: 'alice', source: 'token', exact: true } });
+    expect(token.find((a) => a.key === 'tunedness.identity_source')?.value).toEqual({
+      stringValue: 'token',
+    });
+  });
+
+  it('omits both for an event that does not carry them', () => {
+    const plain = attrsOf({});
+    expect(plain.some((a) => a.key === 'tunedness.session_source')).toBe(false);
+    expect(plain.some((a) => a.key === 'tunedness.session_exact')).toBe(false);
+  });
+});
+
 describe('toLogsPayload', () => {
   it('wraps records in the OTLP resourceLogs envelope', () => {
     const payload = toLogsPayload([toLogRecord(event(), 'mcpguard')], 'mcpguard') as {

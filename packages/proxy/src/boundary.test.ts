@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * The boundary that keeps the transport skeleton liftable.
  *
- * Four files are kept free of both engine packages, so the day McpGuard and its
+ * These files are kept free of both engine packages, so the day McpGuard and its
  * sibling share a transport package is a move rather than a rewrite. This test
  * fails the build if any of them imports an engine, and pins the exact set of
  * files that are *allowed* to — so a fifth engine-aware file is a decision, not
@@ -30,6 +30,12 @@ const ENGINE_FREE = [
   'stdio-wrap.ts',
   'content.ts',
   'list-tools.ts',
+  'http-gateway.ts',
+  'http-auth.ts',
+  'http-response.ts',
+  'node-http.ts',
+  'session-ladder.ts',
+  'upstream.ts',
 ];
 /** The files that are allowed to import an engine — the exact set. */
 const ENGINE_AWARE = ['guard.ts'];

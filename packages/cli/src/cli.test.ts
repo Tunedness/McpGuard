@@ -63,13 +63,11 @@ describe('run', () => {
     expect(stderr.text).toContain('server command');
   });
 
-  it('says plainly that serve is not built yet', async () => {
-    // The one command that is honestly deferred: a skeleton that pretended to be
-    // a guarded gateway would be worse than one that says it is not.
+  it('refuses serve with no upstream, and says how to give one', async () => {
     const { ctx, stderr } = context(['serve']);
 
     await expect(run(ctx)).resolves.toBe(EXIT.usage);
-    expect(stderr.text).toContain('not built yet');
+    expect(stderr.text).toContain('serve needs an upstream');
   });
 
   it('runs a real command: validate reports the default posture', async () => {

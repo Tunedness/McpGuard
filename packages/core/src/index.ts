@@ -37,6 +37,7 @@ export type {
   IdentitySource,
   SecurityEvent,
   SecurityEventKind,
+  SessionSource,
 } from './domain/events.js';
 export type {
   GuardLock,

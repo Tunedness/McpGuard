@@ -224,15 +224,62 @@ describe('a pinned server', () => {
 });
 
 describe('what a refusal leaves behind', () => {
-  it('refuses tools/call until a list passes again', async () => {
+  it('refuses tools/call, and keeps refusing it, after a mismatch', async () => {
     const { gate } = await pinned();
     await refusal(list(gate, [{ name: 'read', description: 'changed' }, write]));
 
     expect((await gate.callGuard())?.reason).toBe('changed');
     expect((await gate.callGuard())?.message).toContain('tools/call refused');
+    expect((await gate.callGuard())?.message).toContain('lock --accept');
+  });
 
-    await list(gate, [read, write]);
+  it('is not lifted by a later list that matches the pin again (ADR-005: halt yapışkandır)', async () => {
+    // A server that shows a changed manifest and then the pinned one is the
+    // rug-pull the halt is for; a matching list must not reopen the gate.
+    const { gate, events } = await pinned();
+    await refusal(list(gate, [{ name: 'read', description: 'changed' }, write]));
+    events.length = 0;
+
+    const again = await refusal(list(gate, [read, write]));
+    expect(again.reason).toBe('changed');
+    expect((await gate.callGuard())?.reason).toBe('changed');
+    // The standing refusal is not a new mismatch to report.
+    expect(events).toEqual([]);
+  });
+
+  it('is lifted by the operator accepting a new pin, and the upstream is checked again', async () => {
+    const asked: string[] = [];
+    const accepted = rig();
+    await list(accepted.gate, [read, { name: 'write', description: 'Write, reviewed.' }]);
+    const reviewedLock = accepted.store.state;
+
+    const { gate, store } = await pinned({
+      fetchTools: async () => {
+        asked.push('fetch');
+        return [read, { name: 'write', description: 'Write, reviewed.' }];
+      },
+    });
+    await refusal(list(gate, [read, { name: 'write', description: 'Write, reviewed.' }]));
+    expect((await gate.callGuard())?.reason).toBe('changed');
+
+    // `lock --accept`: the file now pins what the upstream shows.
+    store.state = reviewedLock;
     expect(await gate.callGuard()).toBeUndefined();
+    expect(asked).toEqual(['fetch']);
+    const page = await list(gate, [read, { name: 'write', description: 'Write, reviewed.' }]);
+    expect(page.tools).toHaveLength(2);
+  });
+
+  it('stays halted for an unreadable lock until the file reads again', async () => {
+    const { gate, store } = await pinned();
+    const good = store.state;
+    store.state = { kind: 'invalid', reason: 'bad json' };
+    await refusal(list(gate, [read, write]));
+    store.state = { kind: 'invalid', reason: 'bad json' };
+    expect((await gate.callGuard())?.reason).toBe('unreadable');
+    store.state = good;
+    // Fixed: the halt is answered, the upstream is checked again, and it matches.
+    expect(await list(gate, [read, write])).toBeDefined();
   });
 
   it('refuses a call under require while nothing is pinned, with no list at all', async () => {
@@ -474,5 +521,225 @@ describe('describedText', () => {
 
   it('is empty for a bare tool', () => {
     expect(describedText({ name: 't' })).toBe('');
+  });
+});
+
+/**
+ * One gate serving several callers (`serve`): what it reports is attributed to the
+ * caller whose request caused it, and two callers paging through the list at the
+ * same moment do not read each other's pages as their own.
+ */
+describe('a gate shared by several callers', () => {
+  interface Caller {
+    readonly id: string;
+  }
+  const alice: Caller = { id: 'alice' };
+  const bob: Caller = { id: 'bob' };
+
+  function shared(
+    fetchTools?: (caller: Caller) => Promise<readonly unknown[]>,
+    store: MemoryStore = memoryStore(),
+    stateKey: (caller: Caller) => string = () => 'server',
+    connectionKey: (caller: Caller) => string = (caller) => caller?.id ?? '',
+  ) {
+    const reports: { event: ManifestEvent; caller: Caller | undefined }[] = [];
+    const gate = createManifestGate<Caller>({
+      serverName: 'srv',
+      onFirstUse: 'write',
+      onMismatch: 'halt',
+      store,
+      scanTool: () => CLEAN,
+      report: (event, caller) => reports.push({ event, caller }),
+      walkKey: (caller) => caller?.id ?? '',
+      stateKey,
+      connectionKey,
+      ...(fetchTools !== undefined ? { fetchTools } : {}),
+    });
+    const page = (caller: Caller, tools: readonly unknown[], cursor?: string, next?: string) =>
+      gate.onList(
+        { method: 'tools/list', params: cursor !== undefined ? { cursor } : {} } as never,
+        (async () => ({ tools, ...(next !== undefined ? { nextCursor: next } : {}) })) as never,
+        caller,
+      );
+    return { gate, store, reports, page };
+  }
+
+  it('reports to the caller that listed', async () => {
+    const { page, reports } = shared();
+    await page(bob, [read]);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.event.kind).toBe('pinned');
+    expect(reports[0]?.caller).toBe(bob);
+  });
+
+  it('keeps two interleaved walks apart', async () => {
+    const { page, store } = shared();
+    // Alice reads page one, then Bob starts and finishes a whole list, then Alice reads page two.
+    await page(alice, [read], undefined, 'next');
+    await page(bob, [read, write]);
+    await page(alice, [write], 'next');
+    // Both walks saw the same two tools; had Alice's second page landed on Bob's
+    // walk, the walk would have held `write` twice and been called malformed.
+    expect(store.writes).toHaveLength(1);
+    expect(serverLockOf(store.writes[0] as GuardLock, 'srv')?.tools.map((t) => t.name)).toEqual([
+      'read',
+      'write',
+    ]);
+  });
+
+  it('asks the upstream of the caller whose call it is checking', async () => {
+    // A lock pinned in an earlier run, and a gate that has not seen a list yet.
+    const earlier = shared();
+    await earlier.page(alice, [read]);
+    const asked: string[] = [];
+    const { gate } = shared(async (caller) => {
+      asked.push(caller.id);
+      return [read];
+    }, earlier.store);
+    expect(await gate.callGuard(bob)).toBeUndefined();
+    expect(asked).toEqual(['bob']);
+  });
+
+  /** A pinned lock; each caller is a session with an upstream connection of its own. */
+  async function twoUpstreams(stateKey?: (caller: Caller) => string) {
+    const r = shared(undefined, undefined, stateKey);
+    await r.page(alice, [read]);
+    r.store.state = { kind: 'ok', lock: r.store.writes[0] as GuardLock };
+    return r;
+  }
+
+  it("keeps the server's halt when another session's upstream lists a clean manifest", async () => {
+    // Each legacy session has an upstream connection of its own, and two of them can
+    // present different manifests. The mismatch was seen on the server: a clean
+    // list on Bob's must not lift it, and it stops Bob as well.
+    const { gate, page } = await twoUpstreams();
+    await refusal(page(alice, [read, write]));
+    expect((await gate.callGuard(alice))?.reason).toBe('changed');
+    await refusal(page(bob, [read]));
+    expect((await gate.callGuard(alice))?.reason).toBe('changed');
+    expect((await gate.callGuard(bob))?.reason).toBe('changed');
+  });
+
+  it("does not lift an upstream's halt by that upstream's own matching list either", async () => {
+    const { gate, page } = await twoUpstreams();
+    await refusal(page(alice, [read, write]));
+    await refusal(page(alice, [read]));
+    expect((await gate.callGuard(alice))?.reason).toBe('changed');
+  });
+
+  it('refuses a session opened after the halt, without asking its upstream', async () => {
+    const asked: string[] = [];
+    const r = shared(async (caller) => {
+      asked.push(caller.id);
+      return [read];
+    });
+    await r.page(alice, [read]);
+    r.store.state = { kind: 'ok', lock: r.store.writes[0] as GuardLock };
+    await refusal(r.page(alice, [read, write]));
+    // Carol opens afterwards and her upstream shows the pinned manifest: the server
+    // is still halted, so she is refused and nobody asks.
+    expect((await r.gate.callGuard({ id: 'carol' }))?.reason).toBe('changed');
+    await refusal(r.page({ id: 'carol' }, [read]));
+    expect(asked).toEqual([]);
+  });
+
+  it('checks a new session before its first call, even after another was verified', async () => {
+    const asked: string[] = [];
+    const { gate, page, store } = shared(async (caller) => {
+      asked.push(caller.id);
+      return caller.id === 'carol' ? [read, write] : [read];
+    });
+    await page(alice, [read]);
+    store.state = { kind: 'ok', lock: store.writes[0] as GuardLock };
+    await page(alice, [read]);
+    expect(await gate.callGuard(alice)).toBeUndefined();
+    // Carol never listed and her upstream serves a changed manifest: her first
+    // call must not ride on Alice's verification.
+    expect((await gate.callGuard({ id: 'carol' }))?.reason).toBe('changed');
+    expect(asked).toEqual(['carol']);
+  });
+
+  describe('callers that share one upstream (the modern era)', () => {
+    const everyone = () => 'modern';
+
+    it('share its halt: no caller lifts it with a list of their own', async () => {
+      const { gate, page } = await twoUpstreams(everyone);
+      await refusal(page(alice, [read, write]));
+      // Bob is another caller of the same upstream, and sees a matching list.
+      await refusal(page(bob, [read]));
+      expect((await gate.callGuard(bob))?.reason).toBe('changed');
+      expect((await gate.callGuard(alice))?.reason).toBe('changed');
+    });
+
+    it('a new caller is refused without asking while the upstream is halted', async () => {
+      const asked: string[] = [];
+      const r = shared(
+        async (caller) => {
+          asked.push(caller.id);
+          return [read];
+        },
+        undefined,
+        everyone,
+      );
+      await r.page(alice, [read]);
+      r.store.state = { kind: 'ok', lock: r.store.writes[0] as GuardLock };
+      await refusal(r.page(alice, [read, write]));
+      expect((await r.gate.callGuard({ id: 'dave' }))?.reason).toBe('changed');
+      expect(asked).toEqual([]);
+    });
+
+    it('a new caller on a re-established connection owes the check again', async () => {
+      // Same upstream, a new connection (the shared client reconnected): verified
+      // is a fact about the connection, so the check is made again.
+      const asked: string[] = [];
+      const r = shared(
+        async (caller) => {
+          asked.push(caller.id);
+          return [read];
+        },
+        undefined,
+        everyone,
+        (caller) => caller.id,
+      );
+      await r.page(alice, [read]);
+      r.store.state = { kind: 'ok', lock: r.store.writes[0] as GuardLock };
+      await r.page(alice, [read]);
+      expect(await r.gate.callGuard(alice)).toBeUndefined();
+      expect(asked).toEqual([]);
+      expect(await r.gate.callGuard({ id: 'after-reconnect' })).toBeUndefined();
+      expect(asked).toEqual(['after-reconnect']);
+    });
+  });
+
+  it('does not let a call through that was being checked when the server was halted', async () => {
+    // Carol's first call asks her upstream for its list. While it answers, Alice's
+    // list shows a mismatch and halts the server. Carol's clean answer does not
+    // outvote that: her call is refused.
+    let alicesList: Promise<unknown> | undefined;
+    const r = shared(async (caller) => {
+      if (caller.id === 'carol') {
+        alicesList = r.page(alice, [read, write]).catch(() => undefined);
+        await alicesList;
+      }
+      return [read];
+    });
+    await r.page(alice, [read]);
+    r.store.state = { kind: 'ok', lock: r.store.writes[0] as GuardLock };
+    expect((await r.gate.callGuard({ id: 'carol' }))?.reason).toBe('changed');
+  });
+
+  it('refuses a call for every caller of one upstream, as that upstream has one manifest', async () => {
+    const { gate, page } = await twoUpstreams();
+    await refusal(page(alice, [read, write]));
+    expect((await gate.callGuard({ id: 'alice' }))?.reason).toBe('changed');
+  });
+
+  it('refuses a call on an unreadable lock before any list, under halt', async () => {
+    // Without this, a connection that reconnects after the lock was damaged would
+    // skip the check, because there is no pin to compare against.
+    const { gate, store } = shared(async () => [read]);
+    store.state = { kind: 'invalid', reason: 'bad json' };
+    expect((await gate.callGuard(alice))?.reason).toBe('unreadable');
+    expect((await gate.callGuard(alice))?.reason).toBe('unreadable');
   });
 });
