@@ -279,7 +279,9 @@ export function scanOptionsFor(
   correlationKey?: string | undefined,
 ): ScanOptions {
   const scan = compiled.scanFor(serverName, toolName);
-  const pii = policy.pii.enabled
+  // A server may switch masking on or off for itself; what is masked stays the policy's.
+  const piiEnabled = policy.servers[serverName]?.pii?.enabled ?? policy.pii.enabled;
+  const pii = piiEnabled
     ? {
         recognizers: policy.pii.recognizers,
         strictChecksum: policy.pii.strict_checksum,

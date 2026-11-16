@@ -25,7 +25,12 @@ export function readKey(env: Env, name: string | undefined): string | undefined 
  * @throws {CliError} with the policy exit code, naming the key and the fix.
  */
 export function assertPolicyRunnable(policy: GuardPolicy, env: Env): void {
-  if (policy.pii.enabled && policy.pii.correlation_tags) {
+  // A server may turn masking on for itself under a policy that has it off, and its
+  // tags need the same key.
+  const masks =
+    policy.pii.enabled ||
+    Object.values(policy.servers).some((server) => server.pii?.enabled === true);
+  if (masks && policy.pii.correlation_tags) {
     const name = policy.pii.correlation_key_env;
     if (name === undefined) {
       throw new CliError('pii.correlation_tags is on but pii.correlation_key_env is not set', {

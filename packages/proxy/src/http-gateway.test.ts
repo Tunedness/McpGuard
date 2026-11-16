@@ -89,9 +89,7 @@ async function rig(
     onRead: async (_request, forward) => forward(),
   };
   const gateway = createHttpGateway<GatewayCallInput>({
-    name: 'up',
-    target: { url: options.target ?? upstream.url },
-    gates,
+    servers: [{ name: 'up', target: { url: options.target ?? upstream.url }, gates }],
     callContext: (input) => input,
     sessionOf: (call) => call.session.sessionId,
     auth: createBearerAuthenticator(options.tokens ?? []),
@@ -164,7 +162,7 @@ const text = (result: { content?: unknown }): string =>
   ((result.content as { text: string }[])[0] as { text: string }).text;
 
 const post = (
-  rigged: Rig,
+  rigged: Pick<Rig, 'base'>,
   body: unknown,
   headers: Record<string, string> = {},
   path = '/mcp/up',
@@ -748,15 +746,15 @@ describe('era is never translated', () => {
   });
 
   it('reports what the upstream speaks when asked', async () => {
-    expect((await (await rig({ era: 'modern' })).gateway.probe()).era).toBe('modern');
-    expect((await (await rig({ era: 'both' })).gateway.probe()).era).toBe('modern');
-    expect((await (await rig({ era: 'legacy' })).gateway.probe()).era).toBe('legacy');
+    expect((await (await rig({ era: 'modern' })).gateway.probe())[0]?.era).toBe('modern');
+    expect((await (await rig({ era: 'both' })).gateway.probe())[0]?.era).toBe('modern');
+    expect((await (await rig({ era: 'legacy' })).gateway.probe())[0]?.era).toBe('legacy');
     const dead = await startUpstream('both');
     const url = dead.url;
     await dead.close();
-    const probed = await (await rig({ target: url })).gateway.probe();
-    expect(probed.era).toBe('unavailable');
-    expect(probed.reason).toBeTruthy();
+    const probed = (await (await rig({ target: url })).gateway.probe())[0];
+    expect(probed?.era).toBe('unavailable');
+    expect(probed?.reason).toBeTruthy();
   });
 });
 
@@ -805,4 +803,367 @@ describe('measuring what the proxy adds', () => {
       expect(call?.totalMs).toBeGreaterThanOrEqual((call?.ingressMs ?? 0) + (call?.egressMs ?? 0));
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// several servers behind one gateway
+// ---------------------------------------------------------------------------
+
+interface MultiRig {
+  readonly gateway: HttpGateway;
+  readonly base: string;
+  readonly upstreams: Record<string, TestUpstream>;
+  /** What each server's own gates were asked, by server name. */
+  readonly seen: Record<string, Recorded[]>;
+  readonly events: { event: string; detail: Record<string, unknown> }[];
+  readonly clock: { at: number };
+}
+
+/**
+ * A gateway over several real upstreams. Each server's gates record into their
+ * own list and, for the servers named in `refuse`, refuse the call, so a test can
+ * tell whose gates a call went through.
+ */
+async function multiRig(
+  servers: { name: string; era?: UpstreamEra; dead?: boolean }[],
+  options: {
+    maxUpstreamConnections?: number;
+    refuse?: string[];
+    tokens?: BearerToken[];
+  } = {},
+): Promise<MultiRig> {
+  const upstreams: Record<string, TestUpstream> = {};
+  const seen: Record<string, Recorded[]> = {};
+  const events: MultiRig['events'] = [];
+  const clock = { at: 1_000_000 };
+  const defs = [];
+  for (const server of servers) {
+    const upstream = await startUpstream(server.era ?? 'both');
+    upstreams[server.name] = upstream;
+    seen[server.name] = [];
+    const url = upstream.url;
+    if (server.dead === true) await upstream.close();
+    else open.push(() => upstream.close());
+    const gates: Gates<GatewayCallInput> = {
+      onCall: async (request, forward, call) => {
+        (seen[server.name] as Recorded[]).push({
+          tool: request.params.name,
+          args: request.params.arguments,
+          call,
+        });
+        if (options.refuse?.includes(server.name) === true) {
+          return { isError: true, content: [{ type: 'text', text: `refused by ${server.name}` }] };
+        }
+        return forward();
+      },
+      onList: async (_request, forward) => forward(),
+      onRead: async (_request, forward) => forward(),
+    };
+    defs.push({ name: server.name, target: { url }, gates });
+  }
+  const gateway = createHttpGateway<GatewayCallInput>({
+    servers: defs,
+    callContext: (input) => input,
+    sessionOf: (call) => call.session.sessionId,
+    auth: createBearerAuthenticator(options.tokens ?? []),
+    allowedHosts: [],
+    allowedOrigins: [],
+    session: { key: 'auto', idleTimeoutMs: 600_000, maxBindings: 64 },
+    maxUpstreamConnections: options.maxUpstreamConnections ?? 8,
+    maxBodyBytes: 1_000_000,
+    maxUpstreamResponseBytes: 1_000_000,
+    clientName: 'mcpguard-test',
+    version: '9.9.9',
+    clock: () => clock.at,
+    onEvent: (event, detail) => events.push({ event, detail }),
+  });
+  open.push(() => gateway.close());
+  const endpoint = await startHttpEndpoint({ handler: gateway.fetch, host: '127.0.0.1', port: 0 });
+  open.push(() => endpoint.close());
+  return {
+    gateway,
+    base: `http://127.0.0.1:${endpoint.port}`,
+    upstreams,
+    seen,
+    events,
+    clock,
+  };
+}
+
+async function connectTo(
+  multi: MultiRig,
+  server: string,
+  options: { modern?: boolean; name?: string } = {},
+): Promise<Client> {
+  const client = new Client(
+    { name: options.name ?? 'agent', version: '1.0.0' },
+    options.modern === true ? MODERN : {},
+  );
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${multi.base}/mcp/${server}`)));
+  open.push(() => client.close());
+  return client;
+}
+
+describe.each([
+  ['legacy', false],
+  ['modern', true],
+] as const)('several servers behind one gateway, in the %s era', (era, modern) => {
+  it('serves each at its own path, through its own gates, to its own upstream', async () => {
+    const m = await multiRig([
+      { name: 'alpha', era },
+      { name: 'beta', era },
+    ]);
+    const alpha = await connectTo(m, 'alpha', { modern });
+    const beta = await connectTo(m, 'beta', { modern });
+
+    await alpha.callTool({ name: 'show_meta', arguments: {} });
+    expect(m.seen.alpha?.map((c) => c.tool)).toEqual(['show_meta']);
+    expect(m.seen.beta).toEqual([]);
+    expect(m.upstreams.alpha?.seenMeta).toHaveLength(1);
+    expect(m.upstreams.beta?.seenMeta).toHaveLength(0);
+
+    await beta.callTool({ name: 'echo', arguments: { text: 'b' } });
+    expect(m.seen.beta?.map((c) => c.tool)).toEqual(['echo']);
+    expect(m.seen.alpha).toHaveLength(1);
+    expect(m.seen.alpha?.[0]?.call.upstream).toBe('alpha');
+    expect(m.seen.beta?.[0]?.call.upstream).toBe('beta');
+  });
+
+  it('lets one server’s gates refuse what the other server’s let through', async () => {
+    const m = await multiRig(
+      [
+        { name: 'alpha', era },
+        { name: 'beta', era },
+      ],
+      { refuse: ['alpha'] },
+    );
+    const alpha = await connectTo(m, 'alpha', { modern });
+    const beta = await connectTo(m, 'beta', { modern });
+    expect(text(await alpha.callTool({ name: 'echo', arguments: { text: 'x' } }))).toBe(
+      'refused by alpha',
+    );
+    expect(text(await beta.callTool({ name: 'echo', arguments: { text: 'x' } }))).toBe('x');
+  });
+
+  it('keeps serving the others when one upstream is down, and answers the dead one with a named error', async () => {
+    const m = await multiRig([
+      { name: 'alpha', era, dead: true },
+      { name: 'beta', era },
+    ]);
+    const beta = await connectTo(m, 'beta', { modern });
+    expect(text(await beta.callTool({ name: 'echo', arguments: { text: 'alive' } }))).toBe('alive');
+
+    await expect(connectTo(m, 'alpha', { modern })).rejects.toThrow();
+    const response = await post(
+      m,
+      modern
+        ? {
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'tools/list',
+            params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
+          }
+        : INITIALIZE,
+      modern ? { 'mcp-protocol-version': '2026-07-28' } : {},
+      '/mcp/alpha',
+    );
+    const body = (await response.json()) as { error?: { data?: Record<string, unknown> } };
+    expect(body.error?.data).toMatchObject({ reason: 'upstream_unavailable', server: 'alpha' });
+    // And the live one is untouched by any of it.
+    expect(text(await beta.callTool({ name: 'echo', arguments: { text: 'still' } }))).toBe('still');
+  });
+
+  it('keeps serving the others when an upstream goes away while the gateway runs', async () => {
+    const m = await multiRig([
+      { name: 'alpha', era },
+      { name: 'beta', era },
+    ]);
+    const alpha = await connectTo(m, 'alpha', { modern });
+    const beta = await connectTo(m, 'beta', { modern });
+    await alpha.callTool({ name: 'echo', arguments: { text: 'before' } });
+
+    await m.upstreams.alpha?.close();
+    await expect(
+      alpha.callTool({ name: 'echo', arguments: { text: 'after' } }, { timeout: 5_000 }),
+    ).rejects.toThrow();
+    expect(text(await beta.callTool({ name: 'echo', arguments: { text: 'unharmed' } }))).toBe(
+      'unharmed',
+    );
+  });
+
+  it('attributes one client talking to two servers to one session', async () => {
+    const m = await multiRig([
+      { name: 'alpha', era },
+      { name: 'beta', era },
+    ]);
+    const trace = '4bf92f3577b34da6a3ce929d0e0e4736';
+    const meta = { _meta: { traceparent: traceparent(trace) } };
+    const alpha = await connectTo(m, 'alpha', { modern });
+    const beta = await connectTo(m, 'beta', { modern });
+    await alpha.callTool({ name: 'echo', arguments: { text: 'a' }, ...meta });
+    await beta.callTool({ name: 'echo', arguments: { text: 'b' }, ...meta });
+    expect(m.seen.alpha?.[0]?.call.session).toMatchObject({ sessionId: trace, exact: true });
+    expect(m.seen.beta?.[0]?.call.session).toMatchObject({ sessionId: trace, exact: true });
+  });
+});
+
+describe('several servers behind one gateway', () => {
+  it('answers 404 to a server that is not served, and does not take another’s name', async () => {
+    const m = await multiRig([{ name: 'alpha' }, { name: 'beta' }]);
+    for (const path of ['/mcp/gamma', '/mcp/alpha/extra', '/mcp/', '/mcp', '/mcp/__proto__']) {
+      expect((await post(m, INITIALIZE, {}, path)).status, path).toBe(404);
+    }
+    expect((await post(m, INITIALIZE, {}, '/mcp/ALPHA')).status).toBe(404);
+  });
+
+  it('decodes a percent-encoded name before looking it up, and still finds no server in a path that smuggles a slash', async () => {
+    const m = await multiRig([{ name: 'alpha', era: 'legacy' }, { name: 'beta' }]);
+    // `%61` is `a`: the name is looked up whole, as `alpha`.
+    expect((await post(m, INITIALIZE, {}, '/mcp/%61lpha')).status).toBe(200);
+    for (const path of ['/mcp/alpha%2F..', '/mcp/alpha%2Fbeta', '/mcp/%2e%2e', '/mcp/%']) {
+      expect((await post(m, INITIALIZE, {}, path)).status, path).toBe(404);
+    }
+  });
+
+  it('does not tell a caller without a token which servers exist: a served name and an unserved one answer alike', async () => {
+    const tokens = [{ identity: 'alice', tokenSha256: hashToken('alice-secret') }];
+    const m = await multiRig([{ name: 'alpha', era: 'legacy' }, { name: 'beta' }], { tokens });
+    for (const path of ['/mcp/alpha', '/mcp/beta', '/mcp/gamma', '/mcp/__proto__', '/mcp/a/b']) {
+      const response = await post(m, INITIALIZE, {}, path);
+      expect(response.status, path).toBe(401);
+      expect(response.headers.get('www-authenticate')).toBe('Bearer');
+    }
+    // With a token the difference is the caller's to see.
+    const auth = { authorization: 'Bearer alice-secret' };
+    expect((await post(m, INITIALIZE, auth, '/mcp/alpha')).status).toBe(200);
+    expect((await post(m, INITIALIZE, auth, '/mcp/gamma')).status).toBe(404);
+    // And the gateway's own health check stays open.
+    expect((await fetch(`${m.base}/healthz`)).status).toBe(200);
+  });
+
+  it('knows a legacy session by the server that opened it: its id is no session on another path', async () => {
+    const m = await multiRig([
+      { name: 'alpha', era: 'legacy' },
+      { name: 'beta', era: 'legacy' },
+    ]);
+    const opened = await post(m, INITIALIZE, {}, '/mcp/alpha');
+    const id = opened.headers.get('mcp-session-id') as string;
+    await opened.text();
+    expect(id).toBeTruthy();
+
+    const ping = { jsonrpc: '2.0', id: 2, method: 'ping' };
+    const elsewhere = await post(m, ping, { 'mcp-session-id': id }, '/mcp/beta');
+    expect(elsewhere.status).toBe(404);
+    const home = await post(m, ping, { 'mcp-session-id': id }, '/mcp/alpha');
+    expect(home.status).toBe(200);
+    expect(m.gateway.sessionCount('alpha')).toBe(1);
+    expect(m.gateway.sessionCount('beta')).toBe(0);
+    expect(m.gateway.sessionCount()).toBe(1);
+  });
+
+  it('bounds the legacy connections of each server on its own', async () => {
+    const m = await multiRig(
+      [
+        { name: 'alpha', era: 'legacy' },
+        { name: 'beta', era: 'legacy' },
+      ],
+      { maxUpstreamConnections: 1 },
+    );
+    const first = await connectTo(m, 'alpha');
+    const refused = await post(m, INITIALIZE, {}, '/mcp/alpha');
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get('retry-after')).toBe('5');
+    // Full for alpha, and nothing of beta's.
+    const other = await connectTo(m, 'beta');
+    expect(text(await other.callTool({ name: 'echo', arguments: { text: 'b' } }))).toBe('b');
+    expect(text(await first.callTool({ name: 'echo', arguments: { text: 'a' } }))).toBe('a');
+    expect(m.events.some((e) => e.detail.reason === 'upstream_connections_full')).toBe(true);
+  });
+
+  it('closes an idle session of one server and leaves a session of another that is in use', async () => {
+    const m = await multiRig([
+      { name: 'alpha', era: 'legacy' },
+      { name: 'beta', era: 'legacy' },
+    ]);
+    const idle = await post(m, INITIALIZE, {}, '/mcp/alpha');
+    await idle.text();
+    const busy = await connectTo(m, 'beta');
+    const held = busy.callTool({ name: 'hold', arguments: {} }, { timeout: 20_000 });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    m.clock.at += 3_600_000;
+    await (await post(m, INITIALIZE, {}, '/mcp/alpha')).text();
+    expect(m.gateway.sessionCount('beta')).toBe(1);
+    expect(m.events.filter((e) => e.event === 'session_closed' && e.detail.why === 'idle')).toEqual(
+      [{ event: 'session_closed', detail: { server: 'alpha', why: 'idle' } }],
+    );
+    m.upstreams.beta?.release();
+    expect(text(await held)).toBe('released');
+  });
+
+  it('guesses one session for a client with no trace id talking to two servers (modern), so a combination can span them', async () => {
+    const m = await multiRig([
+      { name: 'alpha', era: 'modern' },
+      { name: 'beta', era: 'modern' },
+    ]);
+    const alpha = await connectTo(m, 'alpha', { modern: true, name: 'same-agent' });
+    const beta = await connectTo(m, 'beta', { modern: true, name: 'same-agent' });
+    await alpha.callTool({ name: 'echo', arguments: { text: 'a' } });
+    await beta.callTool({ name: 'echo', arguments: { text: 'b' } });
+    const first = m.seen.alpha?.[0]?.call.session;
+    const second = m.seen.beta?.[0]?.call.session;
+    expect(first).toMatchObject({ source: 'client-address', exact: false });
+    expect(second?.sessionId).toBe(first?.sessionId);
+    // Another client is another guess.
+    const other = await connectTo(m, 'beta', { modern: true, name: 'someone-else' });
+    await other.callTool({ name: 'echo', arguments: { text: 'c' } });
+    expect(m.seen.beta?.[1]?.call.session.sessionId).not.toBe(first?.sessionId);
+  });
+
+  it('names a connection once across servers', async () => {
+    const m = await multiRig([{ name: 'alpha' }, { name: 'beta' }]);
+    const alpha = await connectTo(m, 'alpha', { modern: true });
+    const beta = await connectTo(m, 'beta', { modern: true });
+    await alpha.callTool({ name: 'echo', arguments: { text: 'a' } });
+    await beta.callTool({ name: 'echo', arguments: { text: 'b' } });
+    expect(m.seen.alpha?.[0]?.call.connection).not.toBe(m.seen.beta?.[0]?.call.connection);
+  });
+
+  it('reports what each upstream speaks, and which is down', async () => {
+    const m = await multiRig([
+      { name: 'old', era: 'legacy' },
+      { name: 'new', era: 'modern' },
+      { name: 'gone', dead: true },
+    ]);
+    const probed = await m.gateway.probe();
+    expect(probed.map((p) => [p.server, p.era])).toEqual([
+      ['old', 'legacy'],
+      ['new', 'modern'],
+      ['gone', 'unavailable'],
+    ]);
+  });
+
+  it('will not be built with no servers, or one name twice', () => {
+    const base = {
+      callContext: (input: GatewayCallInput) => input,
+      sessionOf: (call: GatewayCallInput) => call.session.sessionId,
+      auth: createBearerAuthenticator([]),
+      allowedHosts: [],
+      allowedOrigins: [],
+      session: { key: 'auto', idleTimeoutMs: 1_000, maxBindings: 4 },
+      maxUpstreamConnections: 1,
+      maxBodyBytes: 1_000,
+      maxUpstreamResponseBytes: 1_000,
+      clientName: 'x',
+      version: '0',
+    };
+    const gates: Gates<GatewayCallInput> = {
+      onCall: async (_r, forward) => forward(),
+      onList: async (_r, forward) => forward(),
+      onRead: async (_r, forward) => forward(),
+    };
+    expect(() => createHttpGateway({ ...base, servers: [] })).toThrow(/at least one server/);
+    const server = { name: 'a', target: { url: 'http://127.0.0.1:1/mcp' }, gates };
+    expect(() => createHttpGateway({ ...base, servers: [server, server] })).toThrow(/used twice/);
+  });
 });

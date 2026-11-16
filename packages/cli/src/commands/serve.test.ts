@@ -127,6 +127,37 @@ describe('what serve refuses to start on', () => {
     expect(stderr.text).toContain('both here and in the policy');
   });
 
+  it('a --name with nothing to name: the servers of a policy are named by their keys', async () => {
+    const { ctx, stderr } = context(
+      ['--name', 'echo'],
+      `version: 1\nservers:\n  alpha:\n    upstream: { command: node, args: ["${ECHO}"] }\n`,
+    );
+    expect(await run(ctx)).toBe(EXIT.usage);
+    expect(stderr.text).toContain('--name names the server of --upstream');
+  });
+
+  it.each([
+    ['a name that cannot be a path segment', 'a/b', '{ url: "http://x.example/mcp" }', 'URL path'],
+    ['a command that is not there', 'alpha', '{ command: no-such-command-anywhere }', 'not found'],
+  ])('a server in the policy with %s', async (_label, name, upstream, message) => {
+    const { ctx, stderr } = context(
+      ['--port', '0'],
+      `version: 1\nservers:\n  "${name}":\n    upstream: ${upstream}\n`,
+    );
+    expect(await run(ctx)).toBe(EXIT.policy);
+    expect(stderr.text).toContain(message);
+    expect(stderr.text).not.toContain('serve_started');
+  });
+
+  it('a policy whose servers define no upstream, with none given here', async () => {
+    const { ctx, stderr } = context(
+      ['--port', '0'],
+      'version: 1\nservers:\n  alpha:\n    roles: [reader]\n',
+    );
+    expect(await run(ctx)).toBe(EXIT.usage);
+    expect(stderr.text).toContain('servers.<name>.upstream in the policy');
+  });
+
   it('a session.key the ladder does not implement', async () => {
     const { ctx, stderr } = context(
       ['--port', '0', '--', 'node', ECHO],
@@ -170,7 +201,14 @@ describe('what serve binds when it does start', () => {
     expect(started.host).toBe('127.0.0.1');
     expect(started.transport).toBe('plain-http');
     expect(started.auth).toBe('none');
-    expect(started.url).toBe(`http://127.0.0.1:${started.port}/mcp/echo`);
+    expect(started.servers).toEqual([
+      expect.objectContaining({
+        name: 'echo',
+        url: `http://127.0.0.1:${started.port}/mcp/echo`,
+        upstream: 'stdio',
+        defined: 'command line',
+      }),
+    ]);
     expect(started).not.toHaveProperty('warning');
     const health = await fetch(`http://127.0.0.1:${started.port}/healthz`);
     expect(health.status).toBe(200);
@@ -205,6 +243,84 @@ describe('what serve binds when it does start', () => {
     expect(String(started.warning)).toContain('plain HTTP');
     // The token is a hash in the policy and appears nowhere in what serve says.
     expect(stderr.text).not.toContain('token_sha256');
+    stop();
+    expect(await running).toBe(EXIT.ok);
+  }, 30_000);
+});
+
+describe('serving several servers', () => {
+  const two = (extra = ''): string =>
+    [
+      'version: 1',
+      'servers:',
+      '  alpha:',
+      `    upstream: { command: node, args: ["${ECHO}"] }`,
+      '  beta:',
+      `    upstream: { command: node, args: ["${ECHO}"] }`,
+      extra,
+    ].join('\n');
+
+  it('starts one endpoint for each server the policy defines, and says where each is', async () => {
+    const { ctx, stderr, stop } = context(['--port', '0'], two());
+    const running = run(ctx);
+    const started = await startedLine(stderr);
+
+    expect(started.servers).toEqual([
+      expect.objectContaining({
+        name: 'alpha',
+        url: `http://127.0.0.1:${started.port}/mcp/alpha`,
+        upstream: 'stdio',
+        defined: 'policy',
+      }),
+      expect.objectContaining({
+        name: 'beta',
+        url: `http://127.0.0.1:${started.port}/mcp/beta`,
+        upstream: 'stdio',
+        defined: 'policy',
+      }),
+    ]);
+    const unknown = await fetch(`http://127.0.0.1:${started.port}/mcp/gamma`, { method: 'POST' });
+    expect(unknown.status).toBe(404);
+    stop();
+    expect(await running).toBe(EXIT.ok);
+    expect(stderr.text).toContain('"servers":["alpha","beta"]');
+  }, 30_000);
+
+  it('adds the server given here to the ones in the policy', async () => {
+    const { ctx, stderr, stop } = context(
+      ['--name', 'extra', '--port', '0', '--', 'node', ECHO],
+      two(),
+    );
+    const running = run(ctx);
+    const started = await startedLine(stderr);
+    expect(
+      (started.servers as { name: string; defined: string }[]).map((s) => [s.name, s.defined]),
+    ).toEqual([
+      ['extra', 'command line'],
+      ['alpha', 'policy'],
+      ['beta', 'policy'],
+    ]);
+    stop();
+    expect(await running).toBe(EXIT.ok);
+  }, 30_000);
+
+  it('starts although one upstream is down, and says which', async () => {
+    const { ctx, stderr, stop } = context(
+      ['--port', '0'],
+      [
+        'version: 1',
+        'servers:',
+        '  alpha:',
+        `    upstream: { command: node, args: ["${ECHO}"] }`,
+        '  gone:',
+        '    upstream: { url: "http://127.0.0.1:9/mcp" }',
+      ].join('\n'),
+    );
+    const running = run(ctx);
+    const started = await startedLine(stderr);
+    const servers = started.servers as { name: string; upstreamEra: string }[];
+    expect(servers.find((s) => s.name === 'alpha')?.upstreamEra).toBe('modern');
+    expect(servers.find((s) => s.name === 'gone')?.upstreamEra).toBe('unavailable');
     stop();
     expect(await running).toBe(EXIT.ok);
   }, 30_000);

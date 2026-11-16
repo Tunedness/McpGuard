@@ -108,6 +108,17 @@ describe('validate: a policy that asks for what this build cannot deliver', () =
     }
   });
 
+  it('refuses correlation_tags with no key when only one server turns masking on', () => {
+    writeFileSync(
+      join(dir, 'guardpolicy.yaml'),
+      'version: 1\npii:\n  enabled: false\n  correlation_tags: true\nservers:\n  crm:\n    pii: { enabled: true }\n',
+    );
+    const error = failure(() => runValidate(ctx([]).context, []));
+
+    expect(error.exitCode).toBe(EXIT.policy);
+    expect(error.message).toMatch(/correlation_key_env/);
+  });
+
   it('accepts correlation_tags once the key is in the environment', () => {
     writeFileSync(
       join(dir, 'guardpolicy.yaml'),
@@ -291,6 +302,105 @@ describe('lock', () => {
       'inj.en.override.ignore-previous',
     );
   }, 30_000);
+
+  describe('a server of the policy (--server <name>, no command)', () => {
+    // A policy's command is looked up on PATH, as `serve` looks it up.
+    const withPath = { PATH: process.env.PATH };
+    const policy = (variant = 'steady'): string =>
+      [
+        'version: 1',
+        'servers:',
+        `  docs: { upstream: { command: node, args: ["${SHIFTY}", ${variant}] } }`,
+        '  bare: { description: "no upstream" }',
+        '',
+      ].join('\n');
+
+    it('is read from its upstream, pinned under its own name and compared on a second run', async () => {
+      writeFileSync(join(dir, 'guardpolicy.yaml'), policy());
+      const accepted = ctx([], withPath);
+      expect(await runLock(accepted.context, ['--accept', '--server', 'docs'])).toBe(EXIT.ok);
+      expect(accepted.stdout.text).toContain('server: "docs"');
+      expect(accepted.stdout.text).toContain('accepted: pinned 2 tool(s)');
+      expect(
+        serverLockOf(parseLock(readFileSync(lockPath(), 'utf8')), 'docs')
+          ?.tools.map((t) => t.name)
+          .sort(),
+      ).toEqual(['lookup', 'mutate']);
+
+      const same = ctx([], withPath);
+      expect(await runLock(same.context, ['--diff', '--server', 'docs'])).toBe(EXIT.ok);
+      expect(same.stdout.text).toContain('matches the pin');
+
+      // The upstream the policy names changes: the diff says so, and writes nothing.
+      writeFileSync(join(dir, 'guardpolicy.yaml'), policy('pulled'));
+      const bytes = readFileSync(lockPath(), 'utf8');
+      const changed = ctx([], withPath);
+      expect(await runLock(changed.context, ['--diff', '--server', 'docs'])).toBe(EXIT.integrity);
+      expect(changed.stdout.text).toContain('altered: "lookup"');
+      expect(readFileSync(lockPath(), 'utf8')).toBe(bytes);
+    }, 30_000);
+
+    it('gives way to a command after `--`, which is read as it always was', async () => {
+      writeFileSync(join(dir, 'guardpolicy.yaml'), policy('pulled'));
+      const { context, stdout } = ctx([], withPath);
+      expect(await runLock(context, ['--accept', '--server', 'docs', ...live('steady')])).toBe(
+        EXIT.ok,
+      );
+      expect(stdout.text).toContain('accepted: pinned 2 tool(s)');
+      // Pinned from the command (steady), not from the policy's `pulled`.
+      const diff = ctx([], withPath);
+      await runLock(diff.context, ['--diff', '--server', 'docs', ...live('steady')]);
+      expect(diff.stdout.text).toContain('matches the pin');
+    }, 30_000);
+
+    it.each([
+      ['a name the policy does not define', 'nope'],
+      ['a server that has no upstream', 'bare'],
+      ['a name that is on Object.prototype', 'constructor'],
+    ])('refuses %s, naming the servers that have one', async (_label, name) => {
+      writeFileSync(join(dir, 'guardpolicy.yaml'), policy());
+      const error = await runLock(ctx([], withPath).context, ['--accept', '--server', name]).catch(
+        (e: unknown) => e as CliError,
+      );
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).exitCode).toBe(EXIT.usage);
+      expect((error as CliError).message).toContain(`has no upstream in the policy`);
+      expect((error as CliError).hints.join(' ')).toContain('"docs"');
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('refuses a command that cannot be started as a policy error, as serve does', async () => {
+      writeFileSync(
+        join(dir, 'guardpolicy.yaml'),
+        'version: 1\nservers:\n  ghost:\n    upstream: { command: no-such-command-anywhere }\n',
+      );
+      for (const mode of ['--diff', '--accept']) {
+        const error = await runLock(ctx([], withPath).context, [mode, '--server', 'ghost']).catch(
+          (e: unknown) => e as CliError,
+        );
+        expect(error).toBeInstanceOf(CliError);
+        expect((error as CliError).exitCode).toBe(EXIT.policy);
+        expect((error as CliError).message).toContain('not found');
+      }
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('says so when the upstream cannot be reached, and writes nothing', async () => {
+      writeFileSync(
+        join(dir, 'guardpolicy.yaml'),
+        'version: 1\nservers:\n  gone:\n    upstream: { url: "http://127.0.0.1:9/mcp" }\n',
+      );
+      const error = await runLock(ctx([], withPath).context, [
+        '--accept',
+        '--server',
+        'gone',
+      ]).catch((e: unknown) => e as CliError);
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).exitCode).toBe(EXIT.runtime);
+      expect((error as CliError).message).toContain("could not read the server's tools");
+      expect(existsSync(lockPath())).toBe(false);
+    }, 30_000);
+  });
 
   it('show prints what is pinned, with the flagged rule ids', async () => {
     await runLock(ctx([]).context, ['--accept', ...live('poisoned')]);

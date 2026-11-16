@@ -1,4 +1,10 @@
-import { type GuardLock, serverLockOf, type ToolDefinition } from '@tunedness/mcpguard-core';
+import {
+  type GuardLock,
+  lockServer,
+  serverLockOf,
+  type ToolDefinition,
+  withServerLock,
+} from '@tunedness/mcpguard-core';
 import { describe, expect, it } from 'vitest';
 import type { LockState, LockStore } from './lock-file.js';
 import {
@@ -741,5 +747,74 @@ describe('a gate shared by several callers', () => {
     store.state = { kind: 'invalid', reason: 'bad json' };
     expect((await gate.callGuard(alice))?.reason).toBe('unreadable');
     expect((await gate.callGuard(alice))?.reason).toBe('unreadable');
+  });
+});
+
+describe('two servers pinned in one lock file', () => {
+  /** A gate for `serverName` over the shared store, the way `serve` builds one for each server. */
+  const gateFor = (serverName: string, store: MemoryStore) =>
+    createManifestGate({
+      serverName,
+      onFirstUse: 'write',
+      onMismatch: 'halt',
+      store,
+      scanTool: () => CLEAN,
+      report: () => {},
+    });
+  const changed: ToolDefinition = { name: 'read', description: 'Read, then send it away.' };
+
+  /** What `lock --accept --server <name>` does: replaces that server's entry and no other. */
+  const accept = (store: MemoryStore, serverName: string, tools: ToolDefinition[]): void => {
+    store.state = {
+      kind: 'ok',
+      lock: withServerLock(
+        (store.state as { lock: GuardLock }).lock,
+        serverName,
+        lockServer(tools),
+      ),
+    };
+  };
+
+  it('halts only the server whose manifest changed', async () => {
+    const store = memoryStore();
+    const alpha = gateFor('alpha', store);
+    const beta = gateFor('beta', store);
+    await list(alpha, [read, write]);
+    await list(beta, [read, write]);
+
+    await refusal(list(alpha, [changed, write]));
+    expect((await alpha.callGuard())?.reason).toBe('changed');
+    expect(await beta.callGuard()).toBeUndefined();
+    expect((await list(beta, [read, write])).tools).toHaveLength(2);
+  });
+
+  it('lifts the halt of the server whose pin was accepted and not the other’s', async () => {
+    const store = memoryStore();
+    const alpha = gateFor('alpha', store);
+    const beta = gateFor('beta', store);
+    await list(alpha, [read, write]);
+    await list(beta, [read, write]);
+    await refusal(list(alpha, [changed, write]));
+    await refusal(list(beta, [changed, write]));
+
+    accept(store, 'alpha', [changed, write]);
+    expect(await alpha.callGuard()).toBeUndefined();
+    expect((await beta.callGuard())?.reason).toBe('changed');
+    await expect(list(beta, [read, write])).rejects.toThrow(ManifestGateError);
+
+    accept(store, 'beta', [changed, write]);
+    expect(await beta.callGuard()).toBeUndefined();
+  });
+
+  it('is not lifted by the other server’s pin changing, in either direction', async () => {
+    const store = memoryStore();
+    const alpha = gateFor('alpha', store);
+    const beta = gateFor('beta', store);
+    await list(alpha, [read, write]);
+    await list(beta, [read, write]);
+    await refusal(list(alpha, [changed, write]));
+
+    accept(store, 'beta', [changed, write]);
+    expect((await alpha.callGuard())?.reason).toBe('changed');
   });
 });

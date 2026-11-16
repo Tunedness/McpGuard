@@ -32,14 +32,16 @@ export type { AuthResult, BearerAuthenticator, BearerToken } from './http-auth.j
 export { createBearerAuthenticator, hashToken, unauthorizedResponse } from './http-auth.js';
 export type {
   GatewayCallInput,
+  GatewayServer,
   GatewayTiming,
   HttpGateway,
   HttpGatewayOptions,
+  ServerProbe,
 } from './http-gateway.js';
 export { createHttpGateway } from './http-gateway.js';
 export { GATEWAY_ERROR, jsonRpcError } from './http-response.js';
-export type { ListToolsOptions } from './list-tools.js';
-export { listAllTools, listStdioTools } from './list-tools.js';
+export type { ListToolsOptions, ListUpstreamOptions } from './list-tools.js';
+export { listAllTools, listStdioTools, listUpstreamTools } from './list-tools.js';
 export type {
   FetchHandler,
   HttpEndpoint,
@@ -74,6 +76,14 @@ export {
   SessionKeyResolver,
   traceIdOf,
 } from './session-ladder.js';
+export type {
+  ConnectionPoolOptions,
+  DropReason,
+  Lease,
+  PooledSession,
+  SessionPoolOptions,
+} from './session-pool.js';
+export { ConnectionPool, SessionPool } from './session-pool.js';
 export type { WrapHandle, WrapOptions } from './stdio-wrap.js';
 export { assertRunnable, wrapStdioServer } from './stdio-wrap.js';
 export type { ConnectOptions, SharedUpstreamOptions, UpstreamTarget } from './upstream.js';

@@ -368,6 +368,13 @@ export const GuardPolicySchemaV1 = z
            * the transport is the command after `--`.
            */
           upstream: UpstreamSchema.optional(),
+          /**
+           * Per-server PII masking, over the global `pii` block. Only the switch is
+           * per server: what is recognised and how it is masked stay one decision
+           * for the whole policy. Scan and access rules are per server already, by
+           * the `<server>__<tool>` glob in `scan.tools` and `tools`.
+           */
+          pii: z.strictObject({ enabled: z.boolean() }).optional(),
           roles: z.array(z.string().min(1)).default([]),
         }),
       )

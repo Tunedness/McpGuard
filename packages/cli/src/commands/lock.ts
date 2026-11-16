@@ -8,14 +8,19 @@
  * `--accept` is the explicit approval that turns that manifest into the new pin.
  * Nothing here ever changes the lock without `--accept`.
  *
- * The live commands start the server themselves, because the transport is a
- * command-line argument and not policy: `mcpguard lock --accept -- node s.mjs`.
+ * The live commands reach the server themselves, in one of two ways. A command
+ * after `--` is started as given: `mcpguard lock --accept -- node s.mjs`. Without
+ * one, `--server <name>` names a server the policy gives an upstream
+ * (`servers.<name>.upstream`, a URL or a command) and it is reached the way
+ * `serve` reaches it, over the same connection path, so the manifest read here is
+ * the manifest the gateway's gate compares.
  */
 import {
   compilePolicy,
   diffServer,
   emptyLock,
   escapeUnsafeJson,
+  type GuardPolicy,
   lockServer,
   type ManifestDiff,
   quote,
@@ -24,7 +29,12 @@ import {
   toToolDefinition,
   withServerLock,
 } from '@tunedness/mcpguard-core';
-import { listStdioTools } from '@tunedness/mcpguard-proxy';
+import {
+  assertRunnable,
+  listStdioTools,
+  listUpstreamTools,
+  type UpstreamTarget,
+} from '@tunedness/mcpguard-proxy';
 import { loadPolicy, resolveAgainst } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
@@ -37,6 +47,8 @@ import { toolScanner } from '../runtime.js';
 export function lockHelp(): string[] {
   return [
     'Usage: mcpguard lock show   [--policy <path>]',
+    '       mcpguard lock --diff   [--policy <path>] --server <name>',
+    '       mcpguard lock --accept [--policy <path>] --server <name> [--expect <set-hash>] [--full]',
     '       mcpguard lock --diff   [--policy <path>] [--server <name>] -- <server-cmd> [args...]',
     '       mcpguard lock --accept [--policy <path>] [--server <name>] [--expect <set-hash>] [--full] -- <server-cmd> [args...]',
     '',
@@ -49,6 +61,8 @@ export function lockHelp(): string[] {
     '            approved is exactly what --diff showed.',
     '  --full    Show whole tool definitions; by default a long one is cut at 4000 characters.',
     '  --server  The name the server is pinned under (default: server; same as wrap --name).',
+    "            With no command after `--`, the server is the policy's: servers.<name>.upstream,",
+    '            a URL or a command, reached the way `serve` reaches it.',
   ];
 }
 
@@ -128,13 +142,24 @@ export async function runLock(context: CliContext, argv: readonly string[]): Pro
 
   if (args.mode === 'show') return show(context, store);
 
-  if (args.command === undefined) {
-    throw new CliError(`lock --${args.mode} needs the server command after \`--\``, {
-      exitCode: EXIT.usage,
-      hints: [`example: mcpguard lock --${args.mode} -- node server.mjs`],
-    });
+  if (args.command === undefined && args.server === undefined) {
+    throw new CliError(
+      `lock --${args.mode} needs the server command after \`--\`, or --server <name> for a server of the policy`,
+      {
+        exitCode: EXIT.usage,
+        hints: [
+          `example: mcpguard lock --${args.mode} -- node server.mjs`,
+          `example: mcpguard lock --${args.mode} --server docs`,
+        ],
+      },
+    );
   }
   const serverName = args.server ?? 'server';
+  // A command after `--` is what is read; only without one is the policy asked.
+  const policyTarget =
+    args.command === undefined
+      ? policyUpstreamOf(loaded.policy, serverName, context.env)
+      : undefined;
   const compiledPolicy = compilePolicy(loaded.policy);
   const scanTool = toolScanner({
     policy: loaded.policy,
@@ -143,7 +168,16 @@ export async function runLock(context: CliContext, argv: readonly string[]): Pro
     serverName,
   });
 
-  const tools = await currentTools(args.command, args.args);
+  const tools = await currentTools(
+    policyTarget !== undefined
+      ? () =>
+          listUpstreamTools({
+            target: policyTarget,
+            clientName: 'mcpguard-lock',
+            maxResponseBytes: loaded.policy.http.max_upstream_response_bytes,
+          })
+      : () => listStdioTools({ command: args.command as string, args: args.args }),
+  );
   const pinnedState = store.read();
   if (pinnedState.kind === 'invalid') {
     throw new CliError(`${store.path} cannot be used: ${pinnedState.reason}`, {
@@ -242,11 +276,50 @@ function show(context: CliContext, store: LockStore): number {
   return EXIT.ok;
 }
 
+/**
+ * Where the policy says server `name` is reached, or a usage error that names the
+ * servers it does define. Which servers there are is the policy's to say: a name
+ * that is not there is refused, never guessed at.
+ */
+function policyUpstreamOf(
+  policy: GuardPolicy,
+  name: string,
+  env: CliContext['env'],
+): UpstreamTarget {
+  const upstream = Object.hasOwn(policy.servers, name) ? policy.servers[name]?.upstream : undefined;
+  if (upstream === undefined) {
+    const defined = Object.entries(policy.servers)
+      .filter(([, server]) => server.upstream !== undefined)
+      .map(([key]) => quote(key));
+    throw new CliError(
+      `server ${quote(name)} has no upstream in the policy (servers.${name}.upstream)`,
+      {
+        exitCode: EXIT.usage,
+        hints: [
+          defined.length > 0
+            ? `servers with an upstream: ${defined.join(', ')}`
+            : 'the policy defines no server with an upstream',
+          'or give the server command after `--`',
+        ],
+      },
+    );
+  }
+  if ('url' in upstream) return { url: new URL(upstream.url).toString() };
+  // The check `serve` makes of the same definition at start-up, with the same answer: a
+  // command that cannot be started is a problem of the policy, not of the run.
+  try {
+    assertRunnable(upstream.command, env);
+  } catch (error) {
+    throw new CliError(messageOf(error), { exitCode: EXIT.policy });
+  }
+  return { command: upstream.command, args: upstream.args };
+}
+
 /** The server's tools right now. A manifest that is not well-formed is not pinned. */
-async function currentTools(command: string, args: readonly string[]): Promise<ToolDefinition[]> {
+async function currentTools(read: () => Promise<unknown[]>): Promise<ToolDefinition[]> {
   let raw: unknown[];
   try {
-    raw = await listStdioTools({ command, args });
+    raw = await read();
   } catch (error) {
     throw new CliError(`could not read the server's tools: ${messageOf(error)}`, {
       exitCode: EXIT.runtime,

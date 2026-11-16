@@ -35,6 +35,7 @@ const ENGINE_FREE = [
   'http-response.ts',
   'node-http.ts',
   'session-ladder.ts',
+  'session-pool.ts',
   'upstream.ts',
 ];
 /** The files that are allowed to import an engine — the exact set. */

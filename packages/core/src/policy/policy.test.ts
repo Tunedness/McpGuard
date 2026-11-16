@@ -403,6 +403,21 @@ describe('the gateway fields (ADR-011)', () => {
     expect(policy.servers.none?.upstream).toBeUndefined();
   });
 
+  it('read a per-server PII switch, and nothing else of the pii block per server', () => {
+    const policy = parsePolicy({
+      version: 1,
+      servers: { crm: { pii: { enabled: true } }, logs: { pii: { enabled: false } }, plain: {} },
+    });
+    expect(policy.servers.crm?.pii).toEqual({ enabled: true });
+    expect(policy.servers.logs?.pii).toEqual({ enabled: false });
+    expect(policy.servers.plain?.pii).toBeUndefined();
+    for (const pii of [{}, { enabled: 'yes' }, { enabled: true, keep_last: 2 }]) {
+      expect(() => parsePolicy({ version: 1, servers: { s: { pii } } })).toThrow(
+        PolicyValidationError,
+      );
+    }
+  });
+
   it.each([
     ['a non-http URL', { url: 'file:///etc/passwd' }],
     ['a URL and a command together', { url: 'https://x.example/mcp', command: 'node' }],

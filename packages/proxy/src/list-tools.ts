@@ -11,6 +11,8 @@
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { PASSTHROUGH_RESULT } from './bridge.js';
+import { EraMismatchError } from './era.js';
+import { connectUpstream, endUpstreamSession, type UpstreamTarget } from './upstream.js';
 
 /** How to reach the server. */
 export interface ListToolsOptions {
@@ -70,6 +72,53 @@ export async function listStdioTools(options: ListToolsOptions): Promise<unknown
   try {
     return await listAllTools(client, options.maxPages);
   } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+/** How {@link listUpstreamTools} reaches the server. */
+export interface ListUpstreamOptions {
+  /** The upstream as the gateway reaches it: a URL or a command. */
+  readonly target: UpstreamTarget;
+  /** Presented to the upstream as `clientInfo`. */
+  readonly clientName: string;
+  /** The same response ceiling the gateway applies to this upstream, for a URL. */
+  readonly maxResponseBytes?: number | undefined;
+  readonly maxPages?: number | undefined;
+}
+
+/**
+ * Asks an upstream for its whole tool list, over the connection path the gateway
+ * itself uses (`connectUpstream`): the same transport, the same response ceiling,
+ * the same way of finding out which protocol era the server speaks. A client that
+ * the gateway could not reach is a client `mcpguard lock` cannot reach either, and
+ * one it can reach is read exactly as the gateway would read it, so the manifest
+ * the lock pins is the one the gate will compare.
+ *
+ * The modern era is tried first, as the gateway's probe does; a legacy-only server
+ * is then asked in its own era. Nothing is translated.
+ *
+ * @throws when the server cannot be reached, errors, or paginates without end.
+ */
+export async function listUpstreamTools(options: ListUpstreamOptions): Promise<unknown[]> {
+  const connect = (era: 'modern' | 'legacy') =>
+    connectUpstream({
+      target: options.target,
+      era,
+      clientName: options.clientName,
+      maxResponseBytes: options.maxResponseBytes,
+    });
+  let client: Client;
+  try {
+    client = await connect('modern');
+  } catch (error) {
+    if (!(error instanceof EraMismatchError)) throw error;
+    client = await connect('legacy');
+  }
+  try {
+    return await listAllTools(client, options.maxPages);
+  } finally {
+    await endUpstreamSession(client).catch(() => {});
     await client.close().catch(() => {});
   }
 }

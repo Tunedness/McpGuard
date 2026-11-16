@@ -339,9 +339,13 @@ async function main(): Promise<void> {
   const timings: GatewayTiming[] = [];
   const upstream = await startUpstream(text);
   const gateway = createHttpGateway<GatewayCallInput>({
-    name: 'bench',
-    target: { url: upstream.url },
-    gates: engineGates(join(dir, 'audit.jsonl')),
+    servers: [
+      {
+        name: 'bench',
+        target: { url: upstream.url },
+        gates: engineGates(join(dir, 'audit.jsonl')),
+      },
+    ],
     callContext: (input) => input,
     sessionOf: (call) => call.session.sessionId,
     auth: createBearerAuthenticator([]),

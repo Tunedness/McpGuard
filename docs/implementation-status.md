@@ -46,13 +46,15 @@ Faz 25 bölümünde.
 digest'li iki ruleset farklı karar verebiliyordu (ADR-009 madde 2). Düzeltildi ve
 testle kilitli; ayrıntı aşağıdaki Faz 26 bölümünde.
 
-**Korumalı HTTP gateway çekirdeği (Faz 18) bitti.** `mcpguard serve` tek upstream
-için `wrap`'in üç kapısını (`tools/call`, `resources/read`, `tools/list`) aynı
+**Korumalı HTTP gateway çekirdeği (Faz 18) bitti, çoklu upstream (Faz 19) geldi.**
+`mcpguard serve` her upstream için `wrap`'in üç kapısını (`tools/call`, `resources/read`, `tools/list`) aynı
 `runtime.ts` koduyla HTTP üzerinden sunuyor; iki era'yı da (legacy session'lı,
 modern session'sız) çeviri yapmadan ayrı bacaklar olarak taşıyor. Gelen oturum
 ADR-006 merdiveniyle çözülüyor, kimlik bearer token'dan geliyor, loopback
-varsayılan. Spike sonuçları ve sınırlar aşağıdaki Faz 18 bölümünde. Çoklu upstream
-ve havuz (`/mcp/<ad>` yönlendirmesi, Faz 19) henüz yok.
+varsayılan. Spike sonuçları ve sınırlar aşağıdaki Faz 18 bölümünde. Faz 19 ile tek
+Guard birden çok sunucunun önünde duruyor: her sunucu kendi yolunda (`/mcp/<ad>`),
+kendi kapılarıyla, kendi `guardlock.json` girdisi ve bağlantı havuzuyla; ayrıntı
+aşağıdaki Faz 19 bölümünde.
 
 Sıradaki iş:
 
@@ -61,7 +63,7 @@ Sıradaki iş:
    paketler tarball'dan kurulup koşturuluyor (`npm run pack:smoke`). Kalan:
    `release.yml`'in `publish` adımının elle tetiklenmesi.
 2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
-3. Diğer P1'ler: `serve`'ün çoklu upstream ve havuzu (Faz 19), sağlık verisi tanıyıcıları, Kademe 2
+3. Diğer P1'ler: ~~`serve`'ün çoklu upstream ve havuzu~~ (Faz 19'da bitti), sağlık verisi tanıyıcıları, Kademe 2
    SLM hakem, checkpoint syslog sink'i, trace context yayımı.
 
 Ayrıntı için bkz. [Faz 12 — Devralan kişiye](#faz-12--dokümanlar-ve-v010-bitti).
@@ -1150,10 +1152,104 @@ için kombinasyon ve manifest kayıtları onun dışındadır.
 ### Bilinmesi gerekenler
 
 - `serve` upstream'i komut satırından alır (`--upstream <url>` ya da `-- komut`);
-  politikadaki `servers.<ad>.upstream` yalnız şemada tanımlı, çoklu upstream (Faz 19)
-  onu kullanacak. İkisi çelişirse hata.
+  politikadaki `servers.<ad>.upstream` Faz 19'da bağlandı. İkisi aynı adı tanımlarsa hata.
 - `max_sessions` yalnız adres-bağlama tablosunu sınırlar.
 - `wrap` davranışı değişmedi: `wrap-process.test.ts` dokunulmadan geçer. `runtime.ts`,
   `manifest-gate.ts` ve `stdio-wrap.ts` fazın dosya listesinin dışında, çağrı bağlamını
   genelleştirmek için dokunuldu (davranışsız).
 - Modern MRTR taşınmaz (V2). `README`'deki "`serve` çalışmayı reddeder" satırı eski.
+
+---
+
+## Faz 19 — HTTP gateway: çoklu upstream ve oturum havuzu (bitti)
+
+PRD P0 "tek Guard, N sunucu". Tasarım `.ssot/tasarim/2026-11-14-http-gateway.md`'deki
+kabul edilmiş seçenek (S2-A yol bazlı, S3-A atıf ile bağlantı ayrık); ADR-011 madde 3.
+
+```
+packages/proxy/src/http-gateway.ts     createHttpGateway: servers[] alır, /mcp/<ad> ile yönlendirir
+packages/proxy/src/session-pool.ts     SessionPool (atıf tablosu + süpürücü), ConnectionPool (sunucu başına)
+packages/cli/src/commands/serve.ts     politika + komut satırından sunucu listesi, sunucu başına buildGates
+packages/cli/src/runtime.ts            sunucu başına PII anahtarı (servers.<ad>.pii.enabled)
+packages/core/src/policy/schema.ts     servers.<ad>.pii
+```
+
+### Davranış
+
+- **Sunucu listesi.** `servers.<ad>.upstream` tanımlı her politika girdisi bir
+  sunucudur; komut satırındaki (`--upstream` ya da `-- komut`, adı `--name`) bir
+  tane daha ekler. Aynı ad iki yerde tanımlıysa açılışta hata (sessiz öncelik yok).
+  Hiç sunucu yoksa hata. `--name` yalnız komut satırı upstream'inin adıdır.
+  Sunucu adı URL yolunda kullanıldığı için `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` olmalı.
+- **Yönlendirme.** `/mcp/<ad>`; tanımsız ad `404`, araç adı/URI/capability'ye dokunulmaz,
+  birleştirme yok. Bir sunucunun legacy `Mcp-Session-Id`'si yalnız o yolda geçerlidir.
+- **Kapılar sunucu başına.** `buildGates` her sunucu için kendi adıyla çağrılır: erişim
+  kuralları (`tools: match: "<ad>__*"`), tarama kuralları (`scan.tools`) ve sunucu başına
+  PII anahtarı (`servers.<ad>.pii.enabled`, yalnız açma/kapama; ne maskeleneceği politikanın
+  tek kararıdır) o sunucuya uygulanır. Kombinasyon geçmişi ve audit zinciri **ortaktır**:
+  `alpha__read_file` + `beta__send_http` aynı oturumda tek kuraldır.
+- **Kilit.** Her sunucu `guardlock.json`'da kendi `servers.<ad>` girdisiyle pinlenir.
+  Halt sunucu başınadır (ADR-005 eki): A'da görülen uyumsuzluk yalnız A'yı durdurur,
+  `lock --accept --server A` yalnız A'nın halt'ını kaldırır, B'ninki durur.
+- **Yalıtım.** Her sunucunun paylaşılan modern `Client`'ı, legacy havuzu ve geri
+  çekilmesi kendisinindir. Çöken upstream'in yolu `upstream_unavailable` (sunucu adıyla)
+  JSON-RPC hatası verir; diğer yollar etkilenmez. Gateway upstream'i ölü bir sunucuyla da
+  açılır; `serve_started` satırı hangisinin `unavailable` olduğunu söyler.
+- **Havuz (`session-pool.ts`).** İki ayrı şey, ayrı sınırlı:
+  - *Atıf:* tek tablo, bütün sunucular için. Yalnız en alttaki basamak (`clientInfo` +
+    adres tahmini) saklanır; `max_sessions` ile sınırlı, `idle_timeout` ile düşer, dolunca
+    en uzun süredir boşta olan girdi gider. Kesin basamaklar (traceparent, baggage,
+    `Mcp-Session-Id`) tabloda tutulmaz, hiçbir şey onları tahliye etmez. Aynı istemci
+    iki sunucuyla konuşursa tahmin edilen oturum aynıdır.
+  - *Bağlantı:* sunucu başına `ConnectionPool`. `max_upstream_connections` dolunca yeni
+    `initialize` `503` + `Retry-After` alır, var olan oturum **tahliye edilmez**;
+    `idle_timeout` dolan, çağrısı olmayan bağlantı `DELETE` gelmese de kapanır; çağrısı
+    süren oturum boşta sayılmaz. Zamanlayıcı yok: süpürme enjekte saatle okunur,
+    gateway başına tek düşük frekanslı `setInterval` (unref'li) ve legacy istekte tembel.
+- **`serve_started` satırı değişti.** Üst düzey `url/server/upstream/upstreamEra` yerine
+  `servers: [{ name, url, upstream, defined, upstreamEra, upstreamNote? }]`.
+  `serve_stopped` `servers: [...]` taşır. Satırı okuyan betik varsa uyarlanmalı.
+
+- **`lock --server <ad>` (kullanıcı kararı 2026-11-16).** `mcpguard lock --diff|--accept
+  --server <ad>` komut verilmediğinde politikadaki sunucuyu (`servers.<ad>.upstream`: URL ya da
+  komut) çözer, araçlarını okur, diff'ler ya da kabul eder. Okuma `serve`'ün kullandığı bağlantı
+  yoluyla yapılır (`listUpstreamTools` -> `connectUpstream`): aynı transport, aynı yanıt boyutu
+  sınırı (`http.max_upstream_response_bytes`), era'yı bulma sırası (önce modern, legacy-only ise
+  legacy); böylece kilitte pinlenen manifest, kapının karşılaştıracağı manifesttir. Kimlik ve
+  TLS: `serve` upstream'e bağlanırken ne kimlik başlığı gönderiyor ne de TLS'i özelleştiriyor
+  (Node varsayılanı); `lock` de aynısını yapar, yani upstream kimlik doğrulaması gerektiriyorsa
+  ikisi de aynı yerde başarısız olur. `-- komut` yolu aynen çalışır ve verilirse politikaya
+  bakılmaz. Politikada olmayan ya da `upstream`'i olmayan ad açık hata verir ve upstream'i
+  olan sunucuların adlarını sayar.
+- `connectUpstream` bir era uyuşmazlığında açılmış legacy oturumunu upstream'de kapatıyor
+  (öncesinde legacy-only bir upstream'e her modern deneme, probe dahil, bir oturum bırakıyordu).
+
+### Doğrulama
+
+`serve-process.test.ts` iki gerçek upstream, tek `serve`, iki era'da: A'da `deny` olan araç
+B'de izinli ve tersi; A'da `block` olan tarama B'de yalnız işaretleniyor; A süreci
+`SIGKILL` ile öldürülünce B sürüyor ve A hata veriyor; iki sunucu stdio `shifty-server` ile
+tek `guardlock.json`'da: A mutasyona uğrayınca yalnız A duruyor, `lock --accept --server A`
+yalnız A'yı açıyor (B'nin pin'i dosyada aynı, B hâlâ `tools/call refused`), sonra
+`--server B` B'yi açıyor. Birim: `session-pool.test.ts`, `http-gateway.test.ts` (çoklu
+sunucu), `manifest-gate.test.ts` (tek kilit iki sunucu), `runtime-context.test.ts`.
+
+### Bilinmesi gerekenler
+
+- Legacy `Mcp-Session-Id` yol başına üretilir; aynı istemcinin iki sunucuya açtığı legacy
+  oturumların kimliği farklıdır, ortak oturum yalnız `traceparent`/baggage ile ya da
+  tahmin basamağında (modern) olur. Kombinasyon kuralının sunucular arasında çalışması
+  buna bağlıdır.
+- Sunucu başına ayrı `max_upstream_connections` ve `max_sessions` yok: ilki sunucu
+  başına aynı değerdir, ikincisi gateway'in tek tablosudur. `max_inflight` gateway geneli.
+- **Ölen upstream ve legacy oturum.** Upstream bağlantısı kapanınca (stdio child'ın ölmesi)
+  oturum havuzdan düşer, `Mcp-Session-Id` sonraki istekte `404` alır ve istemci yeniden
+  `initialize` eder; yuva boşalır. HTTP upstream'de bağlantı kendiliğinden kapanmaz (her
+  istek ayrı), dolayısıyla ölü bir HTTP upstream'in oturumu `idle_timeout` ile düşer; bilinen sınır.
+- **Kimlik doğrulama yönlendirmeden önce.** `auth.tokens` tanımlıyken token'sız istek, sunucu
+  adı var olsun olmasın aynı `401`'i alır; hangi sunucuların sunulduğu token'sız öğrenilemez.
+  `/healthz` açık kalır.
+- Bir sunucunun politika `servers.<ad>.roles` alanı hâlâ okunmuyor (Faz 19 öncesi de öyleydi).
+- `bench/src/latency/http.ts` yalnız yeni `servers: [...]` imzası için güncellendi;
+  `npm run bench:latency:http` p95 legacy 1,56 ms, modern 1,81 ms (bütçe 20 ms).
+

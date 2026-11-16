@@ -1,5 +1,14 @@
 /**
- * The guarded HTTP gateway: one Fetch handler in front of one upstream (ADR-011).
+ * The guarded HTTP gateway: one Fetch handler in front of N upstreams (ADR-011).
+ *
+ * Each upstream is a server with its own path, `/mcp/<name>`, its own gates, its
+ * own shared modern client and its own pool of legacy connections. Nothing is
+ * merged: tool names, URIs and capabilities pass through as the server sent them,
+ * and a server whose upstream is down answers its own path with an error while
+ * every other path goes on. What the servers do share is what describes the
+ * caller rather than the server: the bearer token, the Host and Origin checks, the
+ * limits, and the session attribution table, so one client calling two servers is
+ * one session.
  *
  * `serve` is `wrap` with an HTTP front door, and the front door has to answer
  * questions a pipe never asks: who is calling, which task is this call part of,
@@ -66,11 +75,8 @@ import { GATEWAY_ERROR, jsonRpcError } from './http-response.js';
 import { listAllTools } from './list-tools.js';
 import type { RequestContext } from './node-http.js';
 import { type ClientIdentity, clientInfoOf, type MetaBag } from './remap.js';
-import {
-  type SessionKeyResolution,
-  SessionKeyResolver,
-  type SessionKeyResolverOptions,
-} from './session-ladder.js';
+import type { SessionKeyResolution, SessionKeyResolverOptions } from './session-ladder.js';
+import { type PooledSession, SessionPool } from './session-pool.js';
 import {
   connectUpstream,
   endUpstreamSession,
@@ -118,12 +124,19 @@ export interface GatewayTiming {
   readonly totalMs: number;
 }
 
-/** How a gateway is built. */
-export interface HttpGatewayOptions<C> {
-  /** The name this upstream is routed by: `/mcp/<name>`. */
+/** One upstream the gateway fronts. */
+export interface GatewayServer<C> {
+  /** The name it is routed by: `/mcp/<name>`. Unique in a gateway. */
   readonly name: string;
   readonly target: UpstreamTarget;
+  /** The gates of this server: built for its name, so its rules and its lock entry are its own. */
   readonly gates: Gates<C>;
+}
+
+/** How a gateway is built. */
+export interface HttpGatewayOptions<C> {
+  /** The upstreams, each served at its own path. At least one. */
+  readonly servers: readonly GatewayServer<C>[];
   /** Builds the context the gates read from what the gateway resolved. */
   readonly callContext: (input: GatewayCallInput) => C;
   /** The session id inside a context, to write into the `_meta` sent upstream. */
@@ -134,6 +147,7 @@ export interface HttpGatewayOptions<C> {
   /** Hostnames accepted in `Origin` beyond localhost. */
   readonly allowedOrigins: readonly string[];
   readonly session: Pick<SessionKeyResolverOptions, 'key' | 'idleTimeoutMs' | 'maxBindings'>;
+  /** Legacy upstream connections held open at once, per server. */
   readonly maxUpstreamConnections: number;
   readonly maxBodyBytes: number;
   readonly maxUpstreamResponseBytes: number;
@@ -149,16 +163,23 @@ export interface HttpGatewayOptions<C> {
   readonly onTiming?: ((timing: GatewayTiming) => void) | undefined;
 }
 
+/** What a server's upstream turned out to speak. */
+export interface ServerProbe {
+  readonly server: string;
+  readonly era: Era | 'unavailable';
+  readonly reason?: string;
+}
+
 /** A running gateway. */
 export interface HttpGateway {
   fetch(request: Request, context: RequestContext): Promise<Response>;
   /**
-   * Connects the upstream now, to report what it speaks. Never throws: an
+   * Connects every upstream now, to report what each speaks. Never throws: an
    * upstream that is down is a fact to report, and the gateway still starts.
    */
-  probe(): Promise<{ era: Era | 'unavailable'; reason?: string }>;
-  /** Legacy sessions open right now. */
-  sessionCount(): number;
+  probe(): Promise<readonly ServerProbe[]>;
+  /** Legacy sessions open right now, in one server or in all of them. */
+  sessionCount(server?: string): number;
   close(): Promise<void>;
 }
 
@@ -172,15 +193,11 @@ interface RequestFacts {
   readonly timing: { readonly start: number; sentAt?: number; receivedAt?: number };
 }
 
-interface LegacySession {
+interface LegacySession extends PooledSession {
   id: string | undefined;
   readonly transport: WebStandardStreamableHTTPServerTransport;
   readonly bridge: Bridge;
-  /** The token identity that opened it; the session id is no use to anyone else. */
-  readonly owner: string | undefined;
   readonly clientInfo: ClientIdentity | undefined;
-  lastSeenAt: number;
-  inflight: number;
 }
 
 const LEGACY_VERSIONS: readonly string[] = SUPPORTED_PROTOCOL_VERSIONS.filter(
@@ -243,6 +260,16 @@ function afterBody(response: Response, done: () => void): Response {
   });
 }
 
+/** One server of the gateway: its upstream, its legs, its connection pool. */
+interface Leg {
+  readonly name: string;
+  serveModern(request: Request, body: unknown, facts: RequestFacts): Promise<Response>;
+  serveLegacy(request: Request, body: unknown, facts: RequestFacts): Promise<Response>;
+  probe(): Promise<ServerProbe>;
+  sessionCount(): number;
+  close(): Promise<void>;
+}
+
 /** Builds the gateway. */
 export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGateway {
   const clock = options.clock ?? (() => Date.now());
@@ -253,8 +280,23 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
     options.onEvent?.(event, detail);
   };
 
+  if (options.servers.length === 0) {
+    throw new Error('a gateway needs at least one server');
+  }
+  const names = new Set<string>();
+  for (const server of options.servers) {
+    if (server.name === '' || names.has(server.name)) {
+      throw new Error(`server name "${server.name}" is empty or used twice`);
+    }
+    names.add(server.name);
+  }
+
   const storage = new AsyncLocalStorage<RequestFacts>();
-  const resolver = new SessionKeyResolver({ ...options.session, clock });
+  // One pool for the gateway: the attribution table is shared by every server, so
+  // one client talking to two of them is one session, and the sweeper is one timer.
+  const pool = new SessionPool({ ...options.session, clock });
+  const resolver = pool.resolver;
+  pool.start();
   const hosts =
     options.allowedHosts.length > 0 ? [...options.allowedHosts] : localhostAllowedHostnames();
   // A gateway reachable by name accepts the origins it was given and no others:
@@ -263,23 +305,7 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
     options.allowedHosts.length > 0
       ? [...options.allowedOrigins]
       : [...localhostAllowedOrigins(), ...options.allowedOrigins];
-  const legacySessions = new Map<string, LegacySession>();
-  let opening = 0;
   let closed = false;
-
-  const shared = new SharedUpstream({
-    clock,
-    connect: () =>
-      connectUpstream({
-        target: options.target,
-        era: 'modern',
-        clientName: options.clientName,
-        maxResponseBytes: options.maxUpstreamResponseBytes,
-      }),
-    onError: report,
-    onConnected: () => emit('upstream_connected', { server: options.name, era: 'modern' }),
-    onLost: () => emit('upstream_lost', { server: options.name, era: 'modern' }),
-  });
 
   const connectionIds = new WeakMap<object, string>();
   let connectionCount = 0;
@@ -292,43 +318,6 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
     return id;
   };
 
-  /** The per-call hook of a bridge in `era`: runs the session ladder and asks the host for a context. */
-  const callContextFor =
-    (era: Era, upstream: Bridge['client']) =>
-    (request: BridgedRequest, ctx: ServerContext): C => {
-      const facts = storage.getStore();
-      if (facts === undefined) {
-        throw new ProtocolError(ProtocolErrorCode.InternalError, 'The request context was lost');
-      }
-      const meta = asBag((request.params as { _meta?: unknown } | undefined)?._meta);
-      const clientInfo =
-        facts.clientInfo ?? clientInfoOf(asBag((ctx.mcpReq as { envelope?: unknown }).envelope));
-      const session = resolver.resolve({
-        meta,
-        mcpSessionId: facts.mcpSessionId,
-        clientInfo,
-        remoteAddress: facts.remoteAddress,
-      });
-      if (session === undefined) {
-        // Refused rather than given a session of its own: a call attributed to a
-        // session that exists for that call alone would turn every combination
-        // rule into no rule.
-        throw new ProtocolError(
-          ProtocolErrorCode.InvalidRequest,
-          'The session of this request could not be resolved; check session.key',
-        );
-      }
-      return options.callContext({
-        era,
-        session,
-        tokenIdentity: facts.tokenIdentity,
-        clientInfo,
-        listTools: () => listAllTools(upstream),
-        connection: connectionOf(upstream),
-        upstream: options.name,
-      });
-    };
-
   const onUpstream = (phase: 'sent' | 'received'): void => {
     const timing = storage.getStore()?.timing;
     if (timing === undefined) return;
@@ -336,257 +325,346 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
     else timing.receivedAt = performance.now();
   };
 
-  const bridgeFor = (era: Era, client: Bridge['client'], sharedUpstream: boolean): Bridge =>
-    createBridge<C>({
-      client,
-      serverInfo: client.getServerVersion() ?? { name: options.name, version: '0.0.0' },
-      capabilities: client.getServerCapabilities(),
-      instructions: client.getInstructions(),
-      gates: options.gates,
-      callContext: callContextFor(era, client),
-      sessionOf: options.sessionOf,
-      forwardClientInfo: era === 'modern',
-      sharedUpstream,
-      onError: report,
-      ...(options.onTiming !== undefined ? { onUpstream } : {}),
-    });
-
-  const modern = createMcpHandler(
-    async (): Promise<Server> => {
-      const client = await shared.get();
-      return bridgeFor('modern', client, true).server;
-    },
-    { legacy: 'reject', onerror: report },
-  );
-
-  // -- answers the gateway writes itself ------------------------------------
-
-  const upstreamFailure = (error: unknown, id: string | number | null, era: Era): Response => {
-    const failure = error instanceof Error ? error : new Error(String(error));
-    if (failure instanceof EraMismatchError) {
-      // The answer lists what this endpoint does serve for the server, so a
-      // negotiating client falls back to it instead of giving up.
-      return jsonRpcError(
-        400,
-        GATEWAY_ERROR.unsupportedProtocolVersion,
-        `Unsupported protocol version: the server "${options.name}" does not speak this protocol era`,
-        {
-          supported: era === 'modern' ? [...LEGACY_VERSIONS] : [FIRST_MODERN_PROTOCOL_VERSION],
-          reason: 'era_mismatch',
-          server: options.name,
-        },
-        undefined,
-        id,
-      );
-    }
-    report(failure);
-    const tooLarge = failure instanceof UpstreamResponseTooLarge;
-    return jsonRpcError(
-      200,
-      GATEWAY_ERROR.internal,
-      tooLarge ? 'The upstream response was too large' : 'The upstream server is unavailable',
-      {
-        reason: tooLarge ? 'upstream_response_too_large' : 'upstream_unavailable',
-        server: options.name,
-        ...(tooLarge ? { limit: failure.limit } : {}),
-      },
-      undefined,
-      id,
-    );
-  };
-
   const reject = (reason: string, response: Response, detail: Record<string, unknown> = {}) => {
     emit('request_rejected', { reason, status: response.status, ...detail });
     return response;
   };
 
-  // -- the modern leg --------------------------------------------------------
-
-  const serveModern = async (
-    request: Request,
-    body: unknown,
-    facts: RequestFacts,
-  ): Promise<Response> => {
-    try {
-      await shared.get();
-    } catch (error) {
-      return upstreamFailure(error, idOf(body), 'modern');
-    }
-    return storage.run(facts, () => modern.fetch(request, { parsedBody: body }));
-  };
-
-  // -- the legacy leg --------------------------------------------------------
-
-  const dropLegacy = (session: LegacySession, why: string): void => {
-    if (session.id === undefined || legacySessions.get(session.id) !== session) return;
-    legacySessions.delete(session.id);
-    emit('session_closed', { server: options.name, why });
-    endUpstreamSession(session.bridge.client)
-      .then(() => session.bridge.close())
-      .catch(report);
-  };
-
-  const sweepLegacy = (): void => {
-    const now = clock();
-    for (const session of [...legacySessions.values()]) {
-      if (session.inflight === 0 && now - session.lastSeenAt >= options.session.idleTimeoutMs) {
-        dropLegacy(session, 'idle');
-      }
-    }
-  };
-  const sweeper = setInterval(
-    sweepLegacy,
-    Math.max(1_000, Math.min(60_000, Math.floor(options.session.idleTimeoutMs / 2))),
-  );
-  sweeper.unref();
-
-  const openLegacy = async (
-    request: Request,
-    body: Record<string, unknown>,
-    facts: RequestFacts,
-  ): Promise<Response> => {
-    if (legacySessions.size + opening >= options.maxUpstreamConnections) {
-      return reject(
-        'upstream_connections_full',
-        jsonRpcError(
-          503,
-          GATEWAY_ERROR.refused,
-          'Service busy: too many open sessions for this server',
-          { reason: 'upstream_connections_full', server: options.name },
-          { 'retry-after': '5' },
-          idOf(body),
-        ),
-      );
-    }
-    opening += 1;
-    try {
-      const params = asBag(body.params);
-      const capabilities = asBag(params?.capabilities);
-      const clientInfo = clientInfoOf({ [CLIENT_INFO_META_KEY]: params?.clientInfo });
-      let client: Bridge['client'];
-      try {
-        client = await connectUpstream({
-          target: options.target,
-          era: 'legacy',
+  /**
+   * Everything one server owns. A server's upstream failing is that server's
+   * failure: its shared client, its legacy connections and its pool are its own,
+   * and nothing in a leg reaches another leg's state.
+   */
+  const buildLeg = (server: GatewayServer<C>): Leg => {
+    const serverName = server.name;
+    const shared = new SharedUpstream({
+      clock,
+      connect: () =>
+        connectUpstream({
+          target: server.target,
+          era: 'modern',
           clientName: options.clientName,
           maxResponseBytes: options.maxUpstreamResponseBytes,
-          // What the downstream declared is what the upstream is told.
-          ...(capabilities !== undefined
-            ? {
-                capabilities: capabilities as Parameters<typeof connectUpstream>[0]['capabilities'],
-              }
-            : {}),
-        });
-      } catch (error) {
-        return upstreamFailure(error, idOf(body), 'legacy');
-      }
-
-      const bridge = bridgeFor('legacy', client, false);
-      const session: LegacySession = {
-        id: undefined,
-        bridge,
-        owner: facts.tokenIdentity,
-        clientInfo,
-        lastSeenAt: clock(),
-        inflight: 0,
-        transport: new WebStandardStreamableHTTPServerTransport({
-          // A gateway-minted, unguessable id: it is the exact session rung of the
-          // ladder, and it is the only credential a legacy stream has. The
-          // upstream's own session id never reaches the downstream.
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (id) => {
-            session.id = id;
-            legacySessions.set(id, session);
-            emit('session_opened', { server: options.name, session: id });
-          },
-          onsessionclosed: () => dropLegacy(session, 'deleted'),
         }),
+      onError: report,
+      onConnected: () => emit('upstream_connected', { server: serverName, era: 'modern' }),
+      onLost: () => emit('upstream_lost', { server: serverName, era: 'modern' }),
+    });
+
+    const sessions = pool.connections<LegacySession>({
+      maxConnections: options.maxUpstreamConnections,
+      onDrop: (session, why) => {
+        emit('session_closed', { server: serverName, why });
+        endUpstreamSession(session.bridge.client)
+          .then(() => session.bridge.close())
+          .catch(report);
+      },
+    });
+
+    /** The per-call hook of a bridge in `era`: runs the session ladder and asks the host for a context. */
+    const callContextFor =
+      (era: Era, upstream: Bridge['client']) =>
+      (request: BridgedRequest, ctx: ServerContext): C => {
+        const facts = storage.getStore();
+        if (facts === undefined) {
+          throw new ProtocolError(ProtocolErrorCode.InternalError, 'The request context was lost');
+        }
+        const meta = asBag((request.params as { _meta?: unknown } | undefined)?._meta);
+        const clientInfo =
+          facts.clientInfo ?? clientInfoOf(asBag((ctx.mcpReq as { envelope?: unknown }).envelope));
+        const session = resolver.resolve({
+          meta,
+          mcpSessionId: facts.mcpSessionId,
+          clientInfo,
+          remoteAddress: facts.remoteAddress,
+        });
+        if (session === undefined) {
+          // Refused rather than given a session of its own: a call attributed to a
+          // session that exists for that call alone would turn every combination
+          // rule into no rule.
+          throw new ProtocolError(
+            ProtocolErrorCode.InvalidRequest,
+            'The session of this request could not be resolved; check session.key',
+          );
+        }
+        return options.callContext({
+          era,
+          session,
+          tokenIdentity: facts.tokenIdentity,
+          clientInfo,
+          listTools: () => listAllTools(upstream),
+          connection: connectionOf(upstream),
+          upstream: serverName,
+        });
       };
-      bridge.server.onclose = () => dropLegacy(session, 'closed');
-      try {
-        await bridge.server.connect(session.transport);
-        const response = await storage.run({ ...facts, clientInfo }, () =>
-          session.transport.handleRequest(request, { parsedBody: body }),
+
+    const bridgeFor = (era: Era, client: Bridge['client'], sharedUpstream: boolean): Bridge =>
+      createBridge<C>({
+        client,
+        serverInfo: client.getServerVersion() ?? { name: serverName, version: '0.0.0' },
+        capabilities: client.getServerCapabilities(),
+        instructions: client.getInstructions(),
+        gates: server.gates,
+        callContext: callContextFor(era, client),
+        sessionOf: options.sessionOf,
+        forwardClientInfo: era === 'modern',
+        sharedUpstream,
+        onError: report,
+        ...(options.onTiming !== undefined ? { onUpstream } : {}),
+      });
+
+    const modern = createMcpHandler(
+      async (): Promise<Server> => {
+        const client = await shared.get();
+        return bridgeFor('modern', client, true).server;
+      },
+      { legacy: 'reject', onerror: report },
+    );
+
+    // -- answers the gateway writes itself ----------------------------------
+
+    const upstreamFailure = (error: unknown, id: string | number | null, era: Era): Response => {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (failure instanceof EraMismatchError) {
+        // The answer lists what this endpoint does serve for the server, so a
+        // negotiating client falls back to it instead of giving up.
+        return jsonRpcError(
+          400,
+          GATEWAY_ERROR.unsupportedProtocolVersion,
+          `Unsupported protocol version: the server "${serverName}" does not speak this protocol era`,
+          {
+            supported: era === 'modern' ? [...LEGACY_VERSIONS] : [FIRST_MODERN_PROTOCOL_VERSION],
+            reason: 'era_mismatch',
+            server: serverName,
+          },
+          undefined,
+          id,
         );
-        // An `initialize` the transport refused leaves no session: free what it holds.
-        if (session.id === undefined) await bridge.close();
-        return response;
+      }
+      report(failure);
+      const tooLarge = failure instanceof UpstreamResponseTooLarge;
+      return jsonRpcError(
+        200,
+        GATEWAY_ERROR.internal,
+        tooLarge ? 'The upstream response was too large' : 'The upstream server is unavailable',
+        {
+          reason: tooLarge ? 'upstream_response_too_large' : 'upstream_unavailable',
+          server: serverName,
+          ...(tooLarge ? { limit: failure.limit } : {}),
+        },
+        undefined,
+        id,
+      );
+    };
+
+    // -- the modern leg ------------------------------------------------------
+
+    const serveModern = async (
+      request: Request,
+      body: unknown,
+      facts: RequestFacts,
+    ): Promise<Response> => {
+      try {
+        await shared.get();
       } catch (error) {
-        await bridge.close().catch(report);
+        return upstreamFailure(error, idOf(body), 'modern');
+      }
+      return storage.run(facts, () => modern.fetch(request, { parsedBody: body }));
+    };
+
+    // -- the legacy leg ------------------------------------------------------
+
+    const openLegacy = async (
+      request: Request,
+      body: Record<string, unknown>,
+      facts: RequestFacts,
+    ): Promise<Response> => {
+      const release = sessions.reserve();
+      if (release === undefined) {
+        return reject(
+          'upstream_connections_full',
+          jsonRpcError(
+            503,
+            GATEWAY_ERROR.refused,
+            'Service busy: too many open sessions for this server',
+            { reason: 'upstream_connections_full', server: serverName },
+            { 'retry-after': '5' },
+            idOf(body),
+          ),
+          { server: serverName },
+        );
+      }
+      try {
+        const params = asBag(body.params);
+        const capabilities = asBag(params?.capabilities);
+        const clientInfo = clientInfoOf({ [CLIENT_INFO_META_KEY]: params?.clientInfo });
+        let client: Bridge['client'];
+        try {
+          client = await connectUpstream({
+            target: server.target,
+            era: 'legacy',
+            clientName: options.clientName,
+            maxResponseBytes: options.maxUpstreamResponseBytes,
+            // What the downstream declared is what the upstream is told.
+            ...(capabilities !== undefined
+              ? {
+                  capabilities: capabilities as Parameters<
+                    typeof connectUpstream
+                  >[0]['capabilities'],
+                }
+              : {}),
+          });
+        } catch (error) {
+          return upstreamFailure(error, idOf(body), 'legacy');
+        }
+
+        const bridge = bridgeFor('legacy', client, false);
+        const session: LegacySession = {
+          id: undefined,
+          bridge,
+          owner: facts.tokenIdentity,
+          clientInfo,
+          lastSeenAt: clock(),
+          inflight: 0,
+          transport: new WebStandardStreamableHTTPServerTransport({
+            // A gateway-minted, unguessable id: it is the exact session rung of the
+            // ladder, and it is the only credential a legacy stream has. The
+            // upstream's own session id never reaches the downstream.
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (id) => {
+              session.id = id;
+              sessions.add(id, session);
+              emit('session_opened', { server: serverName, session: id });
+            },
+            onsessionclosed: () => {
+              sessions.drop(session.id, session, 'deleted');
+            },
+          }),
+        };
+        bridge.server.onclose = () => {
+          sessions.drop(session.id, session, 'closed');
+        };
+        // The upstream going away ends the session too: a child that died leaves
+        // nothing to talk to, and a session that stayed would keep its pool slot and,
+        // being used, never look idle. The client's next request gets a 404 and
+        // initializes afresh.
+        client.onclose = () => {
+          sessions.drop(session.id, session, 'closed');
+        };
+        try {
+          await bridge.server.connect(session.transport);
+          const response = await storage.run({ ...facts, clientInfo }, () =>
+            session.transport.handleRequest(request, { parsedBody: body }),
+          );
+          // An `initialize` the transport refused leaves no session: free what it holds.
+          if (session.id === undefined) await bridge.close();
+          return response;
+        } catch (error) {
+          await bridge.close().catch(report);
+          throw error;
+        }
+      } finally {
+        release();
+      }
+    };
+
+    const serveLegacy = async (
+      request: Request,
+      body: unknown,
+      facts: RequestFacts,
+    ): Promise<Response> => {
+      pool.sweep();
+      const sessionId = request.headers.get('mcp-session-id');
+      if (sessionId === null) {
+        const message = asBag(body);
+        if (request.method === 'POST' && message !== undefined && isInitializeRequest(message)) {
+          return openLegacy(request, message, facts);
+        }
+        return reject(
+          'session_required',
+          jsonRpcError(
+            400,
+            GATEWAY_ERROR.invalidRequest,
+            'Bad Request: Mcp-Session-Id header is required',
+            undefined,
+            undefined,
+            idOf(body),
+          ),
+          { server: serverName },
+        );
+      }
+      // Looked up in this server's pool only: a session id minted for another
+      // server's path is no session here.
+      const lease = sessions.use(sessionId, facts.tokenIdentity);
+      if (lease === undefined) {
+        // The same answer for an unknown session and for one that is someone
+        // else's: whether the id exists is not the caller's to learn.
+        return reject(
+          'session_not_found',
+          jsonRpcError(
+            404,
+            GATEWAY_ERROR.refused,
+            'Session not found',
+            undefined,
+            undefined,
+            idOf(body),
+          ),
+          { server: serverName },
+        );
+      }
+      try {
+        const response = await storage.run(
+          { ...facts, mcpSessionId: sessionId, clientInfo: lease.session.clientInfo },
+          () =>
+            lease.session.transport.handleRequest(
+              request,
+              body === undefined ? undefined : { parsedBody: body },
+            ),
+        );
+        // The call is in flight until its response has been read out, not until
+        // the SDK has handed over a stream: an idle sweep must not close a session
+        // in the middle of a long tool call.
+        return afterBody(response, lease.done);
+      } catch (error) {
+        lease.done();
         throw error;
       }
-    } finally {
-      opening -= 1;
-    }
+    };
+
+    return {
+      name: serverName,
+      serveModern,
+      serveLegacy,
+      async probe() {
+        try {
+          await shared.get();
+          return { server: serverName, era: 'modern' };
+        } catch (error) {
+          if (error instanceof EraMismatchError) return { server: serverName, era: 'legacy' };
+          return {
+            server: serverName,
+            era: 'unavailable',
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      sessionCount: () => sessions.size,
+      async close() {
+        await Promise.allSettled([
+          modern.close(),
+          shared.close(),
+          ...sessions.drain().map(async (session) => {
+            await endUpstreamSession(session.bridge.client);
+            await session.bridge.close();
+          }),
+        ]);
+      },
+    };
   };
 
-  const serveLegacy = async (
-    request: Request,
-    body: unknown,
-    facts: RequestFacts,
-  ): Promise<Response> => {
-    sweepLegacy();
-    const sessionId = request.headers.get('mcp-session-id');
-    if (sessionId === null) {
-      const message = asBag(body);
-      if (request.method === 'POST' && message !== undefined && isInitializeRequest(message)) {
-        return openLegacy(request, message, facts);
-      }
-      return reject(
-        'session_required',
-        jsonRpcError(
-          400,
-          GATEWAY_ERROR.invalidRequest,
-          'Bad Request: Mcp-Session-Id header is required',
-          undefined,
-          undefined,
-          idOf(body),
-        ),
-      );
-    }
-    const session = legacySessions.get(sessionId);
-    if (session === undefined || session.owner !== facts.tokenIdentity) {
-      // The same answer for an unknown session and for one that is someone
-      // else's: whether the id exists is not the caller's to learn.
-      return reject(
-        'session_not_found',
-        jsonRpcError(
-          404,
-          GATEWAY_ERROR.refused,
-          'Session not found',
-          undefined,
-          undefined,
-          idOf(body),
-        ),
-      );
-    }
-    session.inflight += 1;
-    session.lastSeenAt = clock();
-    let finished = false;
-    const finish = (): void => {
-      if (finished) return;
-      finished = true;
-      session.inflight -= 1;
-      session.lastSeenAt = clock();
-    };
-    try {
-      const response = await storage.run(
-        { ...facts, mcpSessionId: sessionId, clientInfo: session.clientInfo },
-        () =>
-          session.transport.handleRequest(
-            request,
-            body === undefined ? undefined : { parsedBody: body },
-          ),
-      );
-      // The call is in flight until its response has been read out, not until
-      // the SDK has handed over a stream: an idle sweep must not close a session
-      // in the middle of a long tool call.
-      return afterBody(response, finish);
-    } catch (error) {
-      finish();
-      throw error;
-    }
-  };
+  const legs = new Map<string, Leg>(
+    options.servers.map((server) => [server.name, buildLeg(server)]),
+  );
 
   // -- the front door --------------------------------------------------------
 
@@ -612,6 +690,15 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
       });
     }
 
+    // Before the path is looked at: with tokens defined, whether a server name exists
+    // is for a caller who holds one to learn, so a name that is served and one that is
+    // not answer a caller without a token the same way.
+    const authenticated = options.auth.authenticate(request.headers);
+    if (authenticated.kind === 'refused') {
+      return reject('unauthorized', unauthorizedResponse(), { why: authenticated.reason });
+    }
+    const tokenIdentity = authenticated.kind === 'ok' ? authenticated.identity : undefined;
+
     const segments = url.pathname.split('/');
     let routed: string | undefined;
     if (segments.length === 3 && segments[0] === '' && segments[1] === 'mcp') {
@@ -621,18 +708,14 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
         routed = undefined;
       }
     }
-    if (routed !== options.name) {
+    // An own-property lookup on a Map: a name like `__proto__` is no server.
+    const leg = routed === undefined ? undefined : legs.get(routed);
+    if (leg === undefined) {
       return reject(
         'unknown_server',
         jsonRpcError(404, GATEWAY_ERROR.refused, 'Not found', { reason: 'unknown_server' }),
       );
     }
-
-    const authenticated = options.auth.authenticate(request.headers);
-    if (authenticated.kind === 'refused') {
-      return reject('unauthorized', unauthorizedResponse(), { why: authenticated.reason });
-    }
-    const tokenIdentity = authenticated.kind === 'ok' ? authenticated.identity : undefined;
 
     if (request.method !== 'POST' && request.method !== 'GET' && request.method !== 'DELETE') {
       return reject(
@@ -680,8 +763,8 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
     };
     const response =
       era === 'modern'
-        ? await serveModern(request, body, facts)
-        : await serveLegacy(request, body, facts);
+        ? await leg.serveModern(request, body, facts)
+        : await leg.serveLegacy(request, body, facts);
 
     if (options.onTiming === undefined) return response;
     return afterBody(response, () => {
@@ -714,33 +797,17 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
         );
       }
     },
-    async probe() {
-      try {
-        await shared.get();
-        return { era: 'modern' };
-      } catch (error) {
-        if (error instanceof EraMismatchError) return { era: 'legacy' };
-        return {
-          era: 'unavailable',
-          reason: error instanceof Error ? error.message : String(error),
-        };
-      }
+    probe: () => Promise.all([...legs.values()].map((leg) => leg.probe())),
+    sessionCount(server) {
+      if (server !== undefined) return legs.get(server)?.sessionCount() ?? 0;
+      let total = 0;
+      for (const leg of legs.values()) total += leg.sessionCount();
+      return total;
     },
-    sessionCount: () => legacySessions.size,
     async close() {
       closed = true;
-      clearInterval(sweeper);
-      const sessions = [...legacySessions.values()];
-      legacySessions.clear();
-      await Promise.allSettled([
-        modern.close(),
-        shared.close(),
-        ...sessions.map(async (session) => {
-          await endUpstreamSession(session.bridge.client);
-          await session.bridge.close();
-        }),
-      ]);
-      resolver.clear();
+      pool.close();
+      await Promise.allSettled([...legs.values()].map((leg) => leg.close()));
     },
   };
 }

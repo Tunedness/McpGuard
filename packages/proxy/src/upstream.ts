@@ -149,6 +149,10 @@ export async function connectUpstream(options: ConnectOptions): Promise<Client> 
     await client.connect(transport);
     assertSameEra(era, client.getProtocolEra() ?? 'legacy');
   } catch (error) {
+    // A modern attempt that fell back to the legacy opening, and was then found to be
+    // the wrong era, has a session on the upstream: end it, or every such attempt
+    // (a probe, each retry of a back-off) leaves one behind.
+    await endUpstreamSession(client).catch(() => {});
     await client.close().catch(() => {});
     // A server that answers a legacy opening with the modern revisions it does
     // serve is a different era, not a broken server: say so.
