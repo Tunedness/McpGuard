@@ -1,0 +1,3 @@
+{
+  "health": ["health_ref", "health_date", "gs1_serial", "ssn_us", "mbi_us"]
+}

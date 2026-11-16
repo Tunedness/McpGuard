@@ -285,6 +285,7 @@ export function scanOptionsFor(
   const pii = piiEnabled
     ? {
         recognizers: policy.pii.recognizers,
+        profile: policy.pii.profile,
         strictChecksum: policy.pii.strict_checksum,
         keepLast: policy.pii.keep_last,
         correlationTags: policy.pii.correlation_tags,

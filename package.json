@@ -24,6 +24,8 @@
     "schema:check": "npm run build && npm run schema:check --workspace @tunedness/mcpguard-core",
     "bench:corpus": "npm run build && node bench/dist/injection/generate.js",
     "bench:injection": "npm run build && node bench/dist/injection/run.js",
+    "bench:phi:corpus": "npm run build && node bench/dist/phi/generate.js",
+    "bench:phi": "npm run build && node bench/dist/phi/run.js",
     "bench:latency": "npm run build && node bench/dist/latency/run.js",
     "bench:latency:http": "npm run build && node bench/dist/latency/http.js",
     "lint": "biome check .",

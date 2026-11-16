@@ -1,0 +1,115 @@
+{
+  "anchors": {
+    "health_ref": [
+      "hasta no",
+      "hasta numarası",
+      "hasta kayıt no",
+      "protokol no",
+      "protokol numarası",
+      "dosya no",
+      "dosya numarası",
+      "kayıt no",
+      "yatış no",
+      "takip no",
+      "takip numarası",
+      "e-reçete no",
+      "reçete no",
+      "reçete numarası",
+      "rapor no",
+      "e-rapor no",
+      "provizyon no",
+      "poliçe no",
+      "poliçe numarası",
+      "medula takip no",
+      "medula takip numarası",
+      "epikriz no"
+    ]
+  },
+  "context": {
+    "health_date": [
+      "doğum tarihi",
+      "doğum",
+      "d.t.",
+      "yatış",
+      "yatış tarihi",
+      "taburcu",
+      "taburcu tarihi",
+      "taburculuk",
+      "ölüm tarihi",
+      "vefat tarihi",
+      "ameliyat tarihi"
+    ],
+    "ssn_us": [],
+    "icd10": [
+      "tanı",
+      "tanılar",
+      "ön tanı",
+      "ek tanı",
+      "teşhis",
+      "icd"
+    ],
+    "gs1_serial": [
+      "karekod",
+      "seri",
+      "seri no",
+      "parti",
+      "lot",
+      "its",
+      "ilaç"
+    ]
+  },
+  "profileContext": {
+    "tckn": [
+      "hasta",
+      "sigortalı",
+      "sgk",
+      "yabancı kimlik",
+      "ykn"
+    ],
+    "phone": [
+      "faks"
+    ]
+  },
+  "exclude": {
+    "health_ref": [
+      "kargo",
+      "kurye",
+      "gönderi",
+      "sipariş",
+      "faaliyet raporu",
+      "kasko",
+      "trafik sigortası",
+      "konut sigortası",
+      "dask",
+      "araç",
+      "yenileme"
+    ],
+    "health_date": [
+      "kubernetes",
+      "k8s",
+      "webhook",
+      "admission controller",
+      "batarya",
+      "akü"
+    ]
+  },
+  "strong": {
+    "health_ref": [
+      "hasta",
+      "reçete",
+      "protokol",
+      "medula",
+      "epikriz",
+      "provizyon"
+    ],
+    "health_date": [
+      "doğum tarihi",
+      "d.t.",
+      "yatış tarihi",
+      "taburcu tarihi",
+      "ölüm tarihi",
+      "vefat tarihi",
+      "ameliyat tarihi"
+    ]
+  }
+}

@@ -96,12 +96,23 @@ export interface ScanVerdict {
   readonly engineVersion: string;
   readonly rulesetVersion: string;
   readonly rulesetDigest: string;
+  /**
+   * Digest of the ruleset's PII keyword data. Present only when the health
+   * profile was on or a recogniser that is not a base kind was named (`pii.recognizers`), so a default
+   * verdict carries exactly the fields it always did (ADR-012).
+   */
+  readonly piiDigest?: string | undefined;
 }
 
 /** How PII masking is configured for one scan. Absent → no masking. */
 export interface PiiScanConfig {
-  /** Recogniser ids to run; empty runs all shipped recognisers. */
+  /**
+   * Recogniser ids to run. Empty runs the base set plus what the profile
+   * switches on; a non-empty list is the complete list.
+   */
   readonly recognizers: readonly string[];
+  /** `health` switches on the health recognisers. Absent is `default`. */
+  readonly profile?: 'default' | 'health' | undefined;
   readonly strictChecksum: boolean;
   readonly keepLast: number;
   readonly correlationTags: boolean;

@@ -22,7 +22,8 @@
       "default": "./dist/index.js"
     },
     "./rulesets/*": "./rulesets/*",
-    "./lexicon/*": "./lexicon/*"
+    "./lexicon/*": "./lexicon/*",
+    "./pii/*": "./pii/*"
   },
   "files": [
     "README.md",
@@ -31,6 +32,7 @@
     "!dist/.tsbuildinfo",
     "rulesets",
     "lexicon",
+    "pii",
     "index.json",
     "NOTICE"
   ],

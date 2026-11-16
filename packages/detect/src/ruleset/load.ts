@@ -7,6 +7,7 @@
  * rules and lexicons that made it, and compiles the patterns once.
  */
 import type { z } from 'zod';
+import { type CompiledPiiData, compilePiiData } from '../pii/context.js';
 import { sha256 } from '../util/hash.js';
 import { stableStringify, toJsonValue } from '../util/json.js';
 import { DETECT_VERSION } from '../version.js';
@@ -22,6 +23,8 @@ export interface LoadedRuleset {
   readonly compiled: CompiledRules;
   readonly standalone: ReadonlySet<string>;
   readonly lexicons: CompiledLexicons;
+  /** The PII keyword data, digested on its own. Absent when the ruleset has none. */
+  readonly pii?: CompiledPiiData | undefined;
 }
 
 /** Lexicons with the string lists turned into the sets the detectors use. */
@@ -78,8 +81,9 @@ export function loadRuleset(document: unknown): LoadedRuleset {
   // lexicon section and an empty one agree. The lexicons are digested because
   // the imperative and encoding detectors read them and they move the score.
   // The version and the engine range describe the package, and `locales` is read
-  // by no detector, so none of the three is in it. The PII section, when it
-  // lands, is not in it either: it has its own `piiDigest` (ADR-012).
+  // by no detector, so none of the three is in it. The PII section is not in it
+  // either: it has its own digest, `piiDigest` on a verdict (ADR-012), so adding or
+  // retuning a keyword leaves this one — and every result keyed on it — alone.
   const digest = sha256(
     stableStringify(toJsonValue({ rules: data.rules, lexicons: data.lexicons })),
   );
@@ -93,6 +97,7 @@ export function loadRuleset(document: unknown): LoadedRuleset {
     compiled,
     standalone: compiled.standalone,
     lexicons: compileLexicons(data.lexicons),
+    ...(data.pii !== undefined ? { pii: compilePiiData(data.pii) } : {}),
   };
 }
 

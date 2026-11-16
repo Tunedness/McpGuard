@@ -8,5 +8,12 @@ export {
   RulesetEngineError,
   RulesetValidationError,
 } from './load.js';
-export type { Lexicons, Pattern, Rule, RulesetData } from './schema.js';
-export { LexiconSchema, PatternSchema, RuleId, RuleSchema, RulesetSchema } from './schema.js';
+export type { Lexicons, Pattern, PiiDataSection, Rule, RulesetData } from './schema.js';
+export {
+  LexiconSchema,
+  PatternSchema,
+  PiiDataSchema,
+  RuleId,
+  RuleSchema,
+  RulesetSchema,
+} from './schema.js';

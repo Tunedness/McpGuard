@@ -41,7 +41,7 @@ export function runValidate(context: CliContext, argv: readonly string[]): numbe
     `policy: ${loaded.path ?? '(defaults — no file found)'}`,
     `mode: ${p.mode}`,
     `scan: action=${p.scan.default.action} flag_at=${p.scan.default.flag_at} block_at=${p.scan.default.block_at}`,
-    `pii: ${p.pii.enabled ? `on (strict_checksum=${p.pii.strict_checksum})` : 'off'}`,
+    `pii: ${p.pii.enabled ? `on (${p.pii.profile === 'health' ? 'profile=health, ' : ''}strict_checksum=${p.pii.strict_checksum})` : 'off'}`,
     `audit: ${p.audit.enabled ? `on → ${p.audit.path}` : 'off'}`,
     `lock: ${p.lock.enabled ? `on → ${p.lock.path}` : 'off'}`,
     `tools: ${p.tools.length} rule(s)`,

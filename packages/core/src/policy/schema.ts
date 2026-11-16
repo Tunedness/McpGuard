@@ -159,11 +159,50 @@ const ScanSchema = z
 // PII
 // ---------------------------------------------------------------------------
 
+/**
+ * The recogniser ids a policy may name.
+ *
+ * Duplicated from `@tunedness/mcpguard-detect` on purpose — this package does
+ * not depend on the engine — and pinned to it by a test in the CLI. An unknown
+ * id is a load error: it used to be skipped silently, and a typo in a
+ * regulated tenant's list would have turned a recogniser off without a word.
+ */
+export const PII_RECOGNIZER_IDS = [
+  'tckn',
+  'vkn',
+  'iban',
+  'card',
+  'phone',
+  'email',
+  'health_ref',
+  'health_date',
+  'gs1_serial',
+  'ssn_us',
+  'mbi_us',
+  'icd10',
+  'atc',
+] as const;
+
 const PiiSchema = z
   .strictObject({
     enabled: z.boolean().default(true),
-    /** Recogniser ids from the ruleset package. Empty means every shipped one. */
-    recognizers: z.array(z.string().min(1)).default([]),
+    /**
+     * Which recognisers run. `default` is the six shipped ones, unchanged.
+     * `health` adds the health identifiers (`health_ref`, `health_date`,
+     * `gs1_serial`, `ssn_us`, `mbi_us`) and the profile's extra keywords for the
+     * national id and phone recognisers. It never turns on `icd10` or `atc`:
+     * those reveal a diagnosis or a drug class, and masking the diagnosis can
+     * break the very workflow a clinical agent exists for, so they are named
+     * in `recognizers` or not run.
+     */
+    profile: z.enum(['default', 'health']).default('default'),
+    /**
+     * Recogniser ids to run. Empty means the base set plus what `profile`
+     * switches on. A non-empty list is the complete list: the profile adds no
+     * recogniser to it, though its extra keywords for `tckn` and `phone` still
+     * apply when those are in it. An id that does not exist is an error.
+     */
+    recognizers: z.array(z.enum(PII_RECOGNIZER_IDS)).default([]),
     /**
      * Whether a recogniser with a checksum requires it to pass.
      *

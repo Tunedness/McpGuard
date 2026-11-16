@@ -22,4 +22,4 @@ export type {
   ScanSettingsOverride,
   ToolRule,
 } from './schema.js';
-export { GuardPolicySchemaV1 } from './schema.js';
+export { GuardPolicySchemaV1, PII_RECOGNIZER_IDS } from './schema.js';

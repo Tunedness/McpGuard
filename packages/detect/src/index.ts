@@ -13,19 +13,34 @@
  */
 
 export type {
+  AttributeKind,
+  BaseKind,
+  CompiledPiiData,
+  HealthKind,
   MaskConfig,
   PiiConfig,
+  PiiData,
   PiiKind,
   PiiMatch,
+  PiiProfile,
 } from './pii/index.js';
 export {
+  ATTRIBUTE_KINDS,
+  BASE_KINDS,
   cardScheme,
+  HEALTH_KINDS,
+  isPlausibleSsn,
+  isValidCalendarDate,
+  isValidGs1CheckDigit,
   isValidIbanChecksum,
   isValidLuhn,
+  isValidMbiShape,
   isValidTckn,
   isValidVkn,
   maskEdits,
   maskFor,
+  PII_KINDS,
+  PiiDataMissingError,
   recognize,
 } from './pii/index.js';
 export type {
@@ -33,6 +48,7 @@ export type {
   Lexicons,
   LoadedRuleset,
   Pattern,
+  PiiDataSection,
   Rule,
   RulesetData,
 } from './ruleset/index.js';
@@ -40,6 +56,7 @@ export {
   compileRules,
   engineSatisfies,
   loadRuleset,
+  PiiDataSchema,
   RulesetEngineError,
   RulesetLintError,
   RulesetSchema,

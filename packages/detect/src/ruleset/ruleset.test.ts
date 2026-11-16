@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scanContent } from '../scan.js';
+import { PII_FIXTURE } from '../testing/pii-data.js';
 import type { ScanOptions } from '../types.js';
 import { DETECT_VERSION } from '../version.js';
 import { engineSatisfies, loadRuleset, RulesetLintError, RulesetValidationError } from './index.js';
@@ -146,5 +147,92 @@ describe('engineSatisfies', () => {
   it('treats a >=1.0 caret as pinning the major', () => {
     expect(engineSatisfies('^1.2.0', '1.9.0')).toBe(true);
     expect(engineSatisfies('^1.2.0', '2.0.0')).toBe(false);
+  });
+});
+
+describe('the PII section', () => {
+  const withPii = (pii: unknown): unknown => ({
+    ...(ruleset([validRule]) as object),
+    pii,
+  });
+
+  it('is optional, and a ruleset without it carries no PII data', () => {
+    expect(loadRuleset(ruleset([validRule])).pii).toBeUndefined();
+  });
+
+  it('gets its own digest and leaves the ruleset digest alone (ADR-012)', () => {
+    const without = loadRuleset(ruleset([validRule]));
+    const a = loadRuleset(withPii(PII_FIXTURE));
+    const b = loadRuleset(
+      withPii({
+        ...PII_FIXTURE,
+        anchors: { health_ref: [...PII_FIXTURE.anchors.health_ref, 'dosya no'] },
+      }),
+    );
+    const stronger = loadRuleset(
+      withPii({
+        ...PII_FIXTURE,
+        strong: {
+          ...PII_FIXTURE.strong,
+          health_ref: [...PII_FIXTURE.strong.health_ref, 'epikriz'],
+        },
+      }),
+    );
+    const excluded = loadRuleset(
+      withPii({
+        ...PII_FIXTURE,
+        exclude: {
+          ...PII_FIXTURE.exclude,
+          health_ref: [...PII_FIXTURE.exclude.health_ref, 'kurye'],
+        },
+      }),
+    );
+
+    expect(a.digest).toBe(without.digest);
+    expect(b.digest).toBe(without.digest);
+    expect(a.pii?.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(b.pii?.digest).not.toBe(a.pii?.digest);
+    // The exclusion words are part of what the digest vouches for.
+    expect(excluded.pii?.digest).not.toBe(a.pii?.digest);
+    expect(excluded.digest).toBe(without.digest);
+    expect(stronger.pii?.digest).not.toBe(a.pii?.digest);
+    expect(stronger.digest).toBe(without.digest);
+    expect(loadRuleset(withPii(PII_FIXTURE)).pii?.digest).toBe(a.pii?.digest);
+  });
+
+  it('refuses a profile that names a kind that is not a health kind', () => {
+    expect(() => loadRuleset(withPii({ ...PII_FIXTURE, profiles: { health: ['tckn'] } }))).toThrow(
+      RulesetValidationError,
+    );
+    expect(() => loadRuleset(withPii({ ...PII_FIXTURE, profiles: { health: [] } }))).toThrow(
+      RulesetValidationError,
+    );
+  });
+
+  it('refuses a keyword with nothing to match on, an empty list and an unknown key', () => {
+    const bad = (patch: object): unknown => withPii({ ...PII_FIXTURE, ...patch });
+
+    expect(() => loadRuleset(bad({ anchors: { health_ref: ['...'] } }))).toThrow(
+      RulesetValidationError,
+    );
+    expect(() => loadRuleset(bad({ anchors: { health_ref: [] } }))).toThrow(RulesetValidationError);
+    expect(() => loadRuleset(bad({ surprise: [] }))).toThrow(RulesetValidationError);
+    expect(() => loadRuleset(bad({ strong: { health_ref: ['hasta'] } }))).toThrow(
+      RulesetValidationError,
+    );
+    expect(() => loadRuleset(bad({ exclude: { health_ref: ['kargo'] } }))).toThrow(
+      RulesetValidationError,
+    );
+  });
+
+  it('takes a keyword as text, never as a pattern', () => {
+    // `.*` has no letter or digit, so it is refused outright; `a.*b` is accepted
+    // as the three tokens it contains — `a`, `b` — and matches nothing like a regex would.
+    const loaded = loadRuleset(withPii({ ...PII_FIXTURE, anchors: { health_ref: ['hasta.*no'] } }));
+
+    expect(loaded.pii).toBeDefined();
+    expect(() =>
+      loadRuleset(withPii({ ...PII_FIXTURE, context: { ...PII_FIXTURE.context, icd10: ['.*'] } })),
+    ).toThrow(RulesetValidationError);
   });
 });

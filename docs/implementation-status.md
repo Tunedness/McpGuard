@@ -46,6 +46,13 @@ Faz 25 bölümünde.
 digest'li iki ruleset farklı karar verebiliyordu (ADR-009 madde 2). Düzeltildi ve
 testle kilitli; ayrıntı aşağıdaki Faz 26 bölümünde.
 
+**Sağlık profili (Faz 21) geldi.** `pii.profile: health` beş tanıyıcı ekliyor
+(`health_ref`, `health_date`, `gs1_serial`, `ssn_us`, `mbi_us`); `icd10` ve `atc` yalnız
+`pii.recognizers` içinde adıyla açılıyor. Profil kapalıyken çıktı bayt-birebir eski;
+bilinmeyen tanıyıcı id'si artık politika yüklenirken hata. Anahtar sözcükler
+`@tunedness/mcpguard-ruleset/pii/` altında veri ve ayrı `piiDigest`'te; `bench/phi/`
+korpusu ADR-012 kapısını CI'da zorluyor. Ayrıntı aşağıdaki Faz 21 bölümünde.
+
 **Korumalı HTTP gateway çekirdeği (Faz 18) bitti, çoklu upstream (Faz 19) geldi.**
 `mcpguard serve` her upstream için `wrap`'in üç kapısını (`tools/call`, `resources/read`, `tools/list`) aynı
 `runtime.ts` koduyla HTTP üzerinden sunuyor; iki era'yı da (legacy session'lı,
@@ -63,7 +70,7 @@ Sıradaki iş:
    paketler tarball'dan kurulup koşturuluyor (`npm run pack:smoke`). Kalan:
    `release.yml`'in `publish` adımının elle tetiklenmesi.
 2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
-3. Diğer P1'ler: ~~`serve`'ün çoklu upstream ve havuzu~~ (Faz 19'da bitti), sağlık verisi tanıyıcıları, Kademe 2
+3. Diğer P1'ler: ~~`serve`'ün çoklu upstream ve havuzu~~ (Faz 19'da bitti), ~~sağlık verisi tanıyıcıları~~ (Faz 21'de bitti), Kademe 2
    SLM hakem, checkpoint syslog sink'i, trace context yayımı.
 
 Ayrıntı için bkz. [Faz 12 — Devralan kişiye](#faz-12--dokümanlar-ve-v010-bitti).
@@ -1008,6 +1015,84 @@ ve o motor sürümüyle yeniden üretilir.
 **Devralan kişiye.** `bench/src/injection/run.ts:69` `engineVersion` alanına
 `ruleset.rulesetVersion` yazıyor (motor sürümü değil). Bu fazda dokunulmadı:
 `results.json`'da ikinci bir satırı oynatırdı. Ayrı iş.
+
+---
+
+## Faz 21 — PHI tanıyıcıları `pii.profile: health` arkasında (bitti)
+
+ADR-012 madde 1–3'ün uygulaması. Kullanıcı D-B'yi seçti: aday şekilleri ve validator'lar
+kodda, anahtar sözcükler ve profil üyeliği ruleset verisinde, regex veride yok.
+
+```
+packages/detect/src/pii/kinds.ts          BASE_KINDS / HEALTH_KINDS / ATTRIBUTE_KINDS, PiiProfile
+packages/detect/src/pii/context.ts        sözcük verisi: fold, token, PiiText, compilePiiData
+packages/detect/src/pii/health.ts         health_ref, health_date, ssn_us, mbi_us, icd10, atc
+packages/detect/src/pii/gs1.ts            gs1_serial: (01)+(21) HRI ve ham biçim
+packages/detect/src/pii/checksums.ts      GS1 check digit, takvim, SSN yapısı, MBI konum grameri
+packages/detect/src/pii/recognizers.ts    activeKinds, profil, çakışma çözümü (en uzun span)
+packages/detect/src/ruleset/{schema,load}.ts  opsiyonel `pii` bölümü, ayrı digest
+packages/ruleset/pii/                     profiles.json, context.tr.json, context.en.json
+packages/core/src/policy/schema.ts        pii.profile, recognizers bir enum
+packages/cli/src/runtime.ts               scanOptionsFor profili geçiriyor
+bench/src/phi/ + bench/phi/               korpus, replay, kapı, results.json/md
+.github/workflows/bench.yml               PHI korpus yeniden üretimi + kapı
+```
+
+**Profil semantiği.** `recognizers: []` artık "taban + profilin açtıkları"; dolu liste
+tam liste ve profil üstüne eklemez. Bilinmeyen id politika yüklenirken hata (zod enum;
+`PII_RECOGNIZER_IDS` core'da, `PII_KINDS` detect'te ve `pii-kinds.test.ts` ikisini eşit
+tutuyor). Tabana ve `profile: default`'a giden kod yolu aynen eski: `recognize()`
+profil ve sağlık türü kapalıyken eski `return`'e düşüyor, `determinism.test.ts` ve
+`bench/injection/` diff'siz. Taban bulucuların gövdelerine dokunulmadı; profilin
+`tckn`/`phone` için eklediği sözcükler (`hasta`, `sigortalı`, `faks`...) ayrı bir
+geçişle (`findProfileContext`) uygulanıyor.
+
+**Veri ve digest.** Çapa, bağlam ve dışlama sözcükleri token olarak eşleniyor: iki yanı da küçük harfe ve Türkçe
+harfin ASCII karşılığına katlanıyor (offset korunuyor: `İ` bile uzunluğu değiştirmiyor),
+sözcük listesinden hiçbir desen kurulmuyor. `piiDigest` yalnız `pii` bölümünü özetliyor;
+ruleset `digest`'i (`ef2c6546…`) değişmedi. Verdict'e yalnız profil `health` ya da
+taban dışı bir tanıyıcı adıyla açıkken yazılıyor; başka hâlde alan hiç yok. `mcpguard scan` aynı
+koşulda `pii data: <12 hane>` satırı basıyor.
+
+**Ölçüm (in-sample kapı).** `bench/phi/`: 1959 sentetik öğe (1095 pozitif, 864 negatif), gerçek
+kayıt yok. ADR-012 kapısı `strict_checksum: true`'da, toleranssız; her tanıyıcıda recall
+%100 (`health_ref` 312/312, `health_date` 316/316), kapılı negatiflerde (816) FP: `health_ref` 6
+(%0,7), diğerleri 0. Bu tavandır: korpus, tanıyıcılar ve dışlama listeleri aynı elden ve korpus
+görünürken ayarlandı. `keyword-collisions` ailesi (anahtar sözcüğün sağlık dışı kullanımı: `kargo
+takip no`, `faaliyet raporu`, k8s `admission webhook`) kapıda; `pii/` verisindeki dışlama sözcükleri
+(`kargo`, `courier`, `webhook`...) onu bastırıyor. Dışlama, çapası güçlü bir sağlık sözcüğü içeren
+adayı bastırmıyor (`pii/` verisinde `strong` listesi): `reçete no`, `hasta no`, `MRN`, `date of birth`,
+ve kullanıcı kararıyla (2026-11-16) sağlık talebi/plan çapaları `claim no/number/id/#`, `member id/number`,
+`subscriber id/number`, `insurance id/number`, `policy holder id`, `health plan id`... Yalnız belirsiz
+çapa (`takip no`, `rapor no`, `policy number`, yalın `admission`) bastırılıyor. Güçlü çapaların recall'u
+`exclusion-mixed` ailesiyle (her dışlama sözcüğü ve her güçlü çapa için pozitifler, 159 öğe) kapıda
+ölçülüyor. **Kabul edilmiş FP:** `The claim number N was filed with the courier` artık maskeleniyor
+(`claim` güçlü); öğe negatif olarak korpusta kalıyor ve FP sayılıyor (6/816). Kapı ADR-012'nin
+tüm-negatif FP kapısıdır; hiçbir öğe düşülmüyor. `health_ref`'in kendi tuzaklarına göre oranı (düz
+hesapla 6/180 = %3,3) raporlanıyor ama kapılanmıyor: kabul edilen `claim … courier` şablonu örneklemede
+6 kez çıkıyor. **Bedelin öbür yüzü:**
+`ambiguous-anchor-mixed` pozitifleri (belirsiz çapa + dışlama sözcüğü, kapı dışı) maskelenmiyor:
+`health_ref` 0/24, `health_date` 0/12. Listeler çakışma ailesine bakılarak yazıldığı için yanına
+`keyword-collisions-holdout` (48 öğe, listede olmayan ifadeler) konuldu: kapıda değil, listeyi
+ayarlamak için kullanılmadı. **Holdout rakamları değişmedi:** sağlık dışı referans/tarih
+çakışmaları büyük ölçüde maskeleniyor, 48/48 öğe maskelendi (`health_ref` 26/28, `health_date`
+20/20 kendi türüyle; kalan 2 `Goods receipt MRN: <10 hane>` VKN olarak). Dışlama listeleri
+genellemiyor ve PHI'de fazla maskeleme bilinçli tercih. Aynı aralıktaki iki eşleşmede ad,
+sırayla taban, `gs1_serial`, `mbi_us`, `ssn_us`, `health_date`, `icd10`, `atc`, `health_ref`
+önceliğiyle seçiliyor (doğrulayıcısı güçlü olan kazanır: `Medicare ID <MBI>` `mbi_us` olur).
+`strict_checksum: false` noktasında `gs1_serial` yanlış GTIN'i yalnız bir bağlam sözcüğüyle
+(`karekod`, `lot`, `UDI`...) maskeliyor; korpus bu kurtarmayı ölçmüyor, `gs1.test.ts` kilitli.
+
+**Devralan kişiye.**
+- Audit kaydı bugün ruleset digest'ini de taşımıyor (`rulesetDigest` yalnız `ScanVerdict`'te).
+  `piiDigest` onunla aynı yolda; ADR-012 madde 2 "audit kaydına yazılır" diyor, ama önce
+  audit şemasına digest alanları gelmeli (core, ayrı iş).
+- `icd10` doğrulaması şekil + bağlam; WHO kod listesi pakete girmedi (lisans). Korpus kodları
+  şekilden üretiliyor, listeden değil.
+- `biome.json`'daki `!bench/pii/*` dışlamaları eski plandan kalma ad; korpus `bench/phi/`'de.
+  `packages/ruleset/pii` dışlaması duruyor (veri elle biçimli).
+- Changeset `minor` (`health-profile.md`); sürüm uygulanırken `packages/ruleset/index.json`
+  `engineRange` ve `*_VERSION` sabitleri birlikte güncellenmeli.
 
 ---
 

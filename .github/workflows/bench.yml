@@ -48,6 +48,20 @@ jobs:
           node bench/dist/injection/run.js
           git diff --exit-code -- bench/injection/results.json bench/injection/results.md
 
+      # The PHI corpus is synthetic and generated, so it is reproducible the same
+      # way. The run exits non-zero when a recogniser misses its ADR-012 gate, and
+      # the committed results must match what it writes: a gate is not met by
+      # editing the file.
+      - name: PHI corpus is reproducible
+        run: |
+          node bench/dist/phi/generate.js
+          git diff --exit-code -- bench/phi/corpus.jsonl
+
+      - name: PHI recogniser gates
+        run: |
+          node bench/dist/phi/run.js
+          git diff --exit-code -- bench/phi/results.json bench/phi/results.md
+
       # The latency numbers move with the machine, so they are not diffed; the
       # run asserts the budget itself and fails when the reference workload
       # crosses it.

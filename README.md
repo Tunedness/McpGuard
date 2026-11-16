@@ -73,7 +73,11 @@ node packages/cli/dist/main.js audit verify
   deasciified spellings and homoglyphs.
 - **PII masking** — Turkish national id, tax number, IBAN, card (checksum-gated),
   phone and e-mail, masked to `[KIND:***]` with an optional keyed correlation
-  tag. On its own axis from the injection action.
+  tag. On its own axis from the injection action. An opt-in `pii.profile: health`
+  adds hospital and insurer reference numbers, clinical dates, medicine-pack
+  serials, US SSN and Medicare ids; diagnosis (`icd10`) and drug class (`atc`)
+  codes are available only by name. Names and addresses are not recognised: there
+  is no deterministic way to, and the tier-1 engine has no model.
 - **Access control** — per-tool `allow`/`deny` with roles, and dangerous-
   capability combinations ("read a file" *and* "reach the network").
 - **Manifest pinning** — trust-on-first-use, then a hash lock, so a server that

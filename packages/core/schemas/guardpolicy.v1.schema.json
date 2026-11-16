@@ -342,12 +342,34 @@
           "default": true,
           "type": "boolean"
         },
+        "profile": {
+          "default": "default",
+          "type": "string",
+          "enum": [
+            "default",
+            "health"
+          ]
+        },
         "recognizers": {
           "default": [],
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 1
+            "enum": [
+              "tckn",
+              "vkn",
+              "iban",
+              "card",
+              "phone",
+              "email",
+              "health_ref",
+              "health_date",
+              "gs1_serial",
+              "ssn_us",
+              "mbi_us",
+              "icd10",
+              "atc"
+            ]
           }
         },
         "strict_checksum": {

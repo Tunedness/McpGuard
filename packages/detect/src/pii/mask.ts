@@ -31,6 +31,13 @@ const LABEL: Record<PiiKind, string> = {
   card: 'CARD',
   phone: 'PHONE',
   email: 'EMAIL',
+  health_ref: 'MRN',
+  health_date: 'DATE',
+  gs1_serial: 'GS1',
+  ssn_us: 'SSN',
+  mbi_us: 'MBI',
+  icd10: 'ICD10',
+  atc: 'ATC',
 };
 
 /** The replacement string for one match. */

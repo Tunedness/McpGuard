@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { fixtureData } from '../testing/pii-data.js';
 import {
   cardScheme,
+  isPlausibleSsn,
+  isValidCalendarDate,
   isValidIbanChecksum,
   isValidLuhn,
+  isValidMbiShape,
   isValidTckn,
   isValidVkn,
 } from './checksums.js';
+import { PiiDataMissingError } from './context.js';
+import { BASE_KINDS, PII_KINDS } from './kinds.js';
 import { maskEdits, maskFor } from './mask.js';
-import { type PiiConfig, recognize } from './recognizers.js';
+import { activeKinds, type PiiConfig, type PiiKind, recognize } from './recognizers.js';
 
 /**
  * The recognisers, tested where they earn their keep: the checksum is what
@@ -34,6 +40,20 @@ describe('checksums', () => {
     expect(isValidLuhn('4111111111111111')).toBe(true);
     expect(cardScheme('4111111111111111')).toBe('visa');
     expect(isValidLuhn('4111111111111112')).toBe(false);
+  });
+
+  it('validates the structural rules of the health identifiers', () => {
+    expect(isValidCalendarDate(2024, 2, 29)).toBe(true);
+    expect(isValidCalendarDate(2023, 2, 29)).toBe(false);
+    expect(isValidCalendarDate(1900, 2, 29)).toBe(false);
+    expect(isValidCalendarDate(2000, 2, 29)).toBe(true);
+    expect(isValidCalendarDate(2024, 0, 1)).toBe(false);
+    expect(isValidCalendarDate(2024, 1.5, 1)).toBe(false);
+    expect(isPlausibleSsn('123456789')).toBe(true);
+    expect(isPlausibleSsn('666121234')).toBe(false);
+    expect(isPlausibleSsn('12345678')).toBe(false);
+    expect(isValidMbiShape('1EG4TE5MK73')).toBe(true);
+    expect(isValidMbiShape('1EG4TE5MK7')).toBe(false);
   });
 
   it('validates an IBAN checksum and rejects a broken one', () => {
@@ -170,5 +190,116 @@ describe('strict VKN', () => {
       strictChecksum: true,
     });
     expect(matches.some((m) => m.kind === 'vkn')).toBe(true);
+  });
+});
+
+describe('profiles and the recogniser set', () => {
+  const data = fixtureData();
+  const config = (over: Partial<PiiConfig> = {}): PiiConfig => ({
+    recognizers: new Set(),
+    strictChecksum: true,
+    data,
+    ...over,
+  });
+
+  it('runs the base set when the list is empty and the profile is off', () => {
+    expect([...activeKinds(config())]).toEqual([...BASE_KINDS]);
+    expect([...activeKinds(config({ profile: 'default' }))]).toEqual([...BASE_KINDS]);
+  });
+
+  it('adds what the profile names to the base set, and never the attributes', () => {
+    const kinds = activeKinds(config({ profile: 'health' }));
+
+    expect([...kinds]).toEqual([...BASE_KINDS, ...data.profiles.health]);
+    expect(kinds.has('icd10')).toBe(false);
+    expect(kinds.has('atc')).toBe(false);
+  });
+
+  it('takes a non-empty list as the whole list, whatever the profile', () => {
+    const kinds = activeKinds(
+      config({ profile: 'health', recognizers: new Set<PiiKind>(['icd10']) }),
+    );
+
+    expect([...kinds]).toEqual(['icd10']);
+  });
+
+  it('names every kind once, base first', () => {
+    expect(new Set(PII_KINDS).size).toBe(PII_KINDS.length);
+    expect(PII_KINDS.slice(0, BASE_KINDS.length)).toEqual([...BASE_KINDS]);
+  });
+
+  it('refuses the profile when the ruleset has no PII data', () => {
+    expect(() => recognize('x', config({ profile: 'health', data: undefined }))).toThrow(
+      PiiDataMissingError,
+    );
+    // A recogniser that reads keywords says so too; the ones that do not still run.
+    expect(() =>
+      recognize('tanı E11', config({ recognizers: new Set<PiiKind>(['icd10']), data: undefined })),
+    ).toThrow(PiiDataMissingError);
+    expect(
+      recognize(
+        'id 1EG4TE5MK73',
+        config({ recognizers: new Set<PiiKind>(['mbi_us']), data: undefined }),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('fails the profile on missing data whatever the list holds, not only when a candidate turns up', () => {
+    const noData = config({
+      profile: 'health',
+      data: undefined,
+      recognizers: new Set<PiiKind>(['phone']),
+    });
+
+    expect(() => activeKinds(noData)).toThrow(PiiDataMissingError);
+    expect(() => recognize('merhaba', noData)).toThrow(PiiDataMissingError);
+  });
+
+  it('returns exactly what it always did when no profile and no health kind is on', () => {
+    const text = 'kimlik 10000000146, IBAN TR330006100519786457841326, mail a@acme.co';
+    const plain = recognize(text, { recognizers: new Set(), strictChecksum: true });
+    const withData = recognize(text, config());
+
+    expect(withData).toEqual(plain);
+    expect(plain.map((m) => m.kind)).toEqual(['tckn', 'iban', 'email']);
+  });
+
+  it('keeps the longest span where two kinds cover the same stretch, base first on a tie', () => {
+    // 11 digits after a reference anchor: a national id and a reference number.
+    const tie = recognize('Hasta No: 10000000146', config({ profile: 'health' }));
+    expect(tie.map((m) => m.kind)).toEqual(['tckn']);
+
+    // A real calendar date after a reference anchor is one match, and the
+    // calendar-validated kind names it.
+    const nested = recognize('Protokol No: 2024-05-01 doğum tarihi', config({ profile: 'health' }));
+    expect(nested.map((m) => m.kind)).toEqual(['health_date']);
+    expect(nested[0]?.value).toBe('2024-05-01');
+  });
+
+  it('names an id that is both a reference by anchor and a Medicare id by grammar after the grammar', () => {
+    const matches = recognize('Medicare ID 1EG4-TE5-MK73 eligible', config({ profile: 'health' }));
+
+    expect(matches.map((m) => `${m.kind}:${m.value}`)).toEqual(['mbi_us:1EG4-TE5-MK73']);
+  });
+
+  it('masks the health kinds with their own labels', () => {
+    const matches = recognize(
+      'Hasta No: A1234567 tanı E11.9 SSN 123-45-6789 DOB 1980-03-14 1EG4TE5MK73 N02BE01',
+      config({
+        recognizers: new Set<PiiKind>(PII_KINDS.filter((k) => !BASE_KINDS.includes(k as never))),
+      }),
+    );
+    const masked = maskEdits(matches, { keepLast: 0, correlationTags: false }).map(
+      (e) => e.replacement,
+    );
+
+    expect(masked).toEqual([
+      '[MRN:***]',
+      '[ICD10:***]',
+      '[SSN:***]',
+      '[DATE:***]',
+      '[MBI:***]',
+      '[ATC:***]',
+    ]);
   });
 });

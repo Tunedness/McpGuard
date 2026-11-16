@@ -86,6 +86,7 @@ export {
   evaluateServerAccess,
   GuardPolicySchemaV1,
   globMatches,
+  PII_RECOGNIZER_IDS,
   PolicyValidationError,
   parseDuration,
   parsePolicy,

@@ -531,3 +531,32 @@ describe('the gateway fields (ADR-011)', () => {
     );
   });
 });
+
+describe('pii.profile and pii.recognizers', () => {
+  it('default to the base set, the way a policy without them always did', () => {
+    const policy = parsePolicy({ version: 1 });
+
+    expect(policy.pii.profile).toBe('default');
+    expect(policy.pii.recognizers).toEqual([]);
+  });
+
+  it('accept the health profile and any shipped recogniser id', () => {
+    const policy = parsePolicy({
+      version: 1,
+      pii: { profile: 'health', recognizers: ['tckn', 'health_ref', 'icd10', 'atc'] },
+    });
+
+    expect(policy.pii.profile).toBe('health');
+    expect(policy.pii.recognizers).toEqual(['tckn', 'health_ref', 'icd10', 'atc']);
+  });
+
+  it('reject an unknown profile and an unknown recogniser id instead of skipping it', () => {
+    // A typo in a regulated tenant's list used to switch a recogniser off in silence.
+    expect(() => parsePolicy({ version: 1, pii: { profile: 'hipaa' } })).toThrow(
+      PolicyValidationError,
+    );
+    expect(() => parsePolicy({ version: 1, pii: { recognizers: ['tckm'] } })).toThrow(
+      PolicyValidationError,
+    );
+  });
+});

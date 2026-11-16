@@ -1,0 +1,134 @@
+{
+  "anchors": {
+    "health_ref": [
+      "mrn",
+      "medical record number",
+      "medical record no",
+      "patient id",
+      "patient no",
+      "patient number",
+      "chart number",
+      "chart no",
+      "encounter id",
+      "member id",
+      "member number",
+      "subscriber id",
+      "health plan id",
+      "insurance id",
+      "policy number",
+      "policy no",
+      "claim number",
+      "claim no",
+      "claim id",
+      "subscriber number",
+      "policy holder id",
+      "policyholder id",
+      "beneficiary id",
+      "medicare id",
+      "insurance number",
+      "prescription number",
+      "prescription no",
+      "claim #"
+    ]
+  },
+  "context": {
+    "health_date": [
+      "dob",
+      "date of birth",
+      "birth date",
+      "birthdate",
+      "born",
+      "admission",
+      "admission date",
+      "admitted",
+      "discharge",
+      "discharge date",
+      "discharged",
+      "date of death",
+      "date of service",
+      "service date",
+      "surgery date"
+    ],
+    "ssn_us": [
+      "ssn",
+      "social security",
+      "social security number"
+    ],
+    "icd10": [
+      "diagnosis",
+      "diagnoses",
+      "primary diagnosis",
+      "dx",
+      "icd"
+    ],
+    "gs1_serial": [
+      "udi",
+      "gtin",
+      "lot",
+      "serial",
+      "batch",
+      "dispensed"
+    ]
+  },
+  "profileContext": {
+    "tckn": [],
+    "phone": [
+      "fax"
+    ]
+  },
+  "exclude": {
+    "health_ref": [
+      "courier",
+      "shipping",
+      "shipment",
+      "tracking",
+      "parcel",
+      "freight",
+      "vehicle",
+      "car insurance",
+      "auto insurance",
+      "home insurance",
+      "annual report",
+      "renews",
+      "renewal"
+    ],
+    "health_date": [
+      "kubernetes",
+      "k8s",
+      "webhook",
+      "admission controller",
+      "battery",
+      "voltage",
+      "cluster"
+    ]
+  },
+  "strong": {
+    "health_ref": [
+      "patient",
+      "prescription",
+      "mrn",
+      "medical record",
+      "claim",
+      "member",
+      "subscriber",
+      "insurance",
+      "policy holder",
+      "policyholder",
+      "beneficiary",
+      "medicare",
+      "health plan"
+    ],
+    "health_date": [
+      "dob",
+      "date of birth",
+      "birth date",
+      "birthdate",
+      "admission date",
+      "discharge date",
+      "date of death",
+      "date of service",
+      "service date",
+      "surgery date"
+    ]
+  }
+}

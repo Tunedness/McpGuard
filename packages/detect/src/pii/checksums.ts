@@ -93,3 +93,75 @@ export function cardScheme(digits: string): string | undefined {
   if (/^(6011|65|64[4-9])/.test(digits) && len === 16) return 'discover';
   return undefined;
 }
+
+/**
+ * The GS1 check digit (mod 10, weights 3 and 1) over a GTIN of any length.
+ *
+ * The weights run from the right: the digit next to the check digit weighs 3,
+ * the next 1, and so on. `digits` is the whole GTIN, check digit included.
+ */
+export function isValidGs1CheckDigit(digits: string): boolean {
+  if (!/^\d{8,18}$/.test(digits)) return false;
+  let sum = 0;
+  let weight = 3;
+  for (let i = digits.length - 2; i >= 0; i--) {
+    sum += Number(digits[i]) * weight;
+    weight = weight === 3 ? 1 : 3;
+  }
+  return (10 - (sum % 10)) % 10 === Number(digits[digits.length - 1]);
+}
+
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** Whether `year-month-day` is a real Gregorian calendar date. */
+export function isValidCalendarDate(year: number, month: number, day: number): boolean {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const limit = month === 2 && leap ? 29 : (DAYS_IN_MONTH[month - 1] ?? 0);
+  return day <= limit;
+}
+
+/**
+ * The structural rules the SSA publishes for a US Social Security number: the
+ * area is not 000, 666 or 900–999, the group is not 00 and the serial is not
+ * 0000. There is no check digit; this only rules out numbers that were never
+ * issued. Takes the nine digits with the separators already removed.
+ */
+export function isPlausibleSsn(digits: string): boolean {
+  if (!/^\d{9}$/.test(digits)) return false;
+  const area = Number(digits.slice(0, 3));
+  const group = Number(digits.slice(3, 5));
+  const serial = Number(digits.slice(5));
+  if (area === 0 || area === 666 || area >= 900) return false;
+  return group !== 0 && serial !== 0;
+}
+
+/** The letters a Medicare Beneficiary Identifier may carry: A–Z without S L O I B Z. */
+const MBI_LETTER = 'ACDEFGHJKMNPQRTUVWXY';
+
+/**
+ * The position grammar of a US Medicare Beneficiary Identifier (CMS), eleven
+ * characters, `C A AN N A AN N A A N N`: C is 1–9, A a permitted letter, AN a
+ * permitted letter or a digit, N a digit. Takes the characters with the
+ * display hyphens already removed.
+ */
+export function isValidMbiShape(value: string): boolean {
+  if (value.length !== 11) return false;
+  const upper = value.toUpperCase();
+  const letter = (i: number): boolean => MBI_LETTER.includes(upper[i] ?? '#');
+  const digit = (i: number): boolean => /\d/.test(upper[i] ?? '#');
+  return (
+    /[1-9]/.test(upper[0] ?? '#') &&
+    letter(1) &&
+    (letter(2) || digit(2)) &&
+    digit(3) &&
+    letter(4) &&
+    (letter(5) || digit(5)) &&
+    digit(6) &&
+    letter(7) &&
+    letter(8) &&
+    digit(9) &&
+    digit(10)
+  );
+}

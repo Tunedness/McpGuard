@@ -14,7 +14,9 @@
     "corpus:injection": "node dist/injection/generate.js",
     "bench:injection": "node dist/injection/run.js",
     "bench:latency": "node dist/latency/run.js",
-    "bench:latency:http": "node dist/latency/http.js"
+    "bench:latency:http": "node dist/latency/http.js",
+    "corpus:phi": "node dist/phi/generate.js",
+    "bench:phi": "node dist/phi/run.js"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

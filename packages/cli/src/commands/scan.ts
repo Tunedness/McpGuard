@@ -73,6 +73,8 @@ export function runScan(context: CliContext, argv: readonly string[]): number {
       (f) => `  ${f.family} ${f.ruleId} (weight ${f.weight}) — ${f.evidence}`,
     ),
     `pii: ${verdict.piiFindings.length === 0 ? 'none' : verdict.piiFindings.map((p) => p.kind).join(', ')}`,
+    // Present only when the health profile or an attribute recogniser was on.
+    ...(verdict.piiDigest !== undefined ? [`pii data: ${verdict.piiDigest.slice(0, 12)}`] : []),
   ]);
   return verdict.action === 'allow' ? EXIT.ok : EXIT.integrity;
 }

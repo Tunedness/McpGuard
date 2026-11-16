@@ -49,5 +49,47 @@ export function loadRulesetData(): unknown {
       verbsTr: readJson(manifest.files.verbsTr ?? ''),
       benignImperatives: readJson(manifest.files.benignImperatives ?? ''),
     },
+    pii: loadPii(manifest.files),
+  };
+}
+
+/** One locale's PII keyword file. Every list may be empty; the merged one may not. */
+interface PiiContextFile {
+  anchors: { health_ref: string[] };
+  context: { health_date: string[]; ssn_us: string[]; icd10: string[]; gs1_serial: string[] };
+  exclude: { health_ref: string[]; health_date: string[] };
+  strong: { health_ref: string[]; health_date: string[] };
+  profileContext: { tckn: string[]; phone: string[] };
+}
+
+/**
+ * The PII section: the profile membership and the per-locale keyword files,
+ * merged Turkish first then English. Keywords are data, never patterns — the
+ * engine tokenises them and compares text.
+ */
+function loadPii(files: Record<string, string>): unknown {
+  const tr = readJson(files.piiContextTr ?? '') as PiiContextFile;
+  const en = readJson(files.piiContextEn ?? '') as PiiContextFile;
+  return {
+    profiles: readJson(files.piiProfiles ?? ''),
+    anchors: { health_ref: [...tr.anchors.health_ref, ...en.anchors.health_ref] },
+    context: {
+      health_date: [...tr.context.health_date, ...en.context.health_date],
+      ssn_us: [...tr.context.ssn_us, ...en.context.ssn_us],
+      icd10: [...tr.context.icd10, ...en.context.icd10],
+      gs1_serial: [...tr.context.gs1_serial, ...en.context.gs1_serial],
+    },
+    exclude: {
+      health_ref: [...tr.exclude.health_ref, ...en.exclude.health_ref],
+      health_date: [...tr.exclude.health_date, ...en.exclude.health_date],
+    },
+    strong: {
+      health_ref: [...tr.strong.health_ref, ...en.strong.health_ref],
+      health_date: [...tr.strong.health_date, ...en.strong.health_date],
+    },
+    profileContext: {
+      tckn: [...tr.profileContext.tckn, ...en.profileContext.tckn],
+      phone: [...tr.profileContext.phone, ...en.profileContext.phone],
+    },
   };
 }

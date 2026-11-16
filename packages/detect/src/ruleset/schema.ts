@@ -7,6 +7,7 @@
  * cheap kinds cannot express catastrophic backtracking at all.
  */
 import { z } from 'zod';
+import { HEALTH_KINDS } from '../pii/kinds.js';
 
 export const RuleId = z
   .string()
@@ -101,6 +102,50 @@ export const LexiconSchema = z.strictObject({
   benignImperatives: z.array(z.string().min(2)).default([]),
 });
 
+/**
+ * A keyword for a PII recogniser: a literal word or phrase, never a pattern.
+ *
+ * It is tokenised on letters and digits and compared as text, so there is no
+ * syntax in it to get wrong and nothing to backtrack. The one rule is that it
+ * has a letter or a digit to match on.
+ */
+const PiiWord = z
+  .string()
+  .max(60)
+  .regex(/[\p{L}\p{N}]/u);
+const PiiWords = z.array(PiiWord).min(1).max(200);
+
+/**
+ * The PII section: keyword context and profile membership, as data (ADR-012).
+ *
+ * The candidate shapes and validators stay in code. Digested on its own as
+ * `piiDigest`, so the ruleset's `digest` — and every injection result keyed on
+ * it — does not move when a keyword does.
+ */
+export const PiiDataSchema = z.strictObject({
+  /** Which recognisers each profile switches on. */
+  profiles: z.strictObject({ health: z.array(z.enum(HEALTH_KINDS)).min(1) }),
+  /** Words that must come before a reference number. */
+  anchors: z.strictObject({ health_ref: PiiWords }),
+  /** Words that must sit beside a value for it to count. */
+  context: z.strictObject({
+    health_date: PiiWords,
+    ssn_us: PiiWords,
+    icd10: PiiWords,
+    gs1_serial: PiiWords,
+  }),
+  /** Words that say a keyword hit is not clinical; a candidate beside one is not masked. */
+  exclude: z.strictObject({ health_ref: PiiWords, health_date: PiiWords }),
+  /**
+   * Words that make an anchor or context phrase unambiguously clinical. A phrase
+   * that contains one is never suppressed by an exclusion word; one that does
+   * not (`takip no`, `admission`) is.
+   */
+  strong: z.strictObject({ health_ref: PiiWords, health_date: PiiWords }),
+  /** Words a profile adds to a base recogniser's own context. */
+  profileContext: z.strictObject({ tckn: PiiWords, phone: PiiWords }),
+});
+
 export const RulesetSchema = z.strictObject({
   schemaVersion: z.literal(1),
   rulesetVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
@@ -109,9 +154,12 @@ export const RulesetSchema = z.strictObject({
   locales: z.array(z.enum(['und', 'en', 'tr'])).min(1),
   rules: z.array(RuleSchema).min(1).max(5000),
   lexicons: LexiconSchema.prefault({}),
+  /** Optional: a ruleset without it cannot serve `pii.profile: health`. */
+  pii: PiiDataSchema.optional(),
 });
 
 export type Rule = z.infer<typeof RuleSchema>;
+export type PiiDataSection = z.infer<typeof PiiDataSchema>;
 export type Lexicons = z.infer<typeof LexiconSchema>;
 export type RulesetData = z.infer<typeof RulesetSchema>;
 export type Pattern = z.infer<typeof PatternSchema>;

@@ -7,6 +7,9 @@
     "rules": "rulesets/injection.v1.json",
     "verbsEn": "lexicon/verbs.en.json",
     "verbsTr": "lexicon/verbs.tr.json",
-    "benignImperatives": "lexicon/benign-imperatives.json"
+    "benignImperatives": "lexicon/benign-imperatives.json",
+    "piiProfiles": "pii/profiles.json",
+    "piiContextTr": "pii/context.tr.json",
+    "piiContextEn": "pii/context.en.json"
   }
 }

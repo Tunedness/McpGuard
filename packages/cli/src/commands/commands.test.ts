@@ -172,6 +172,64 @@ describe('scan', () => {
   });
 });
 
+describe('scan with pii.profile: health', () => {
+  const epicrisis = [
+    'EPİKRİZ',
+    'Protokol No: 8842019',
+    'Doğum tarihi: 14.03.1980',
+    'Karekod: (01)08699999999994(21)AB12CD34EF56(17)261231',
+    'Tanı: E11.9',
+    'Kontrol önerildi.',
+  ].join('\n');
+
+  const kinds = (stdout: string): string[] => {
+    const line = stdout.split('\n').find((l) => l.startsWith('pii: ')) ?? '';
+    return line.slice('pii: '.length).split(', ');
+  };
+
+  it('masks the health identifiers the default profile leaves alone', () => {
+    writeFileSync(join(dir, 'e.txt'), epicrisis);
+    const off = ctx([]);
+    runScan(off.context, ['e.txt']);
+    expect(off.stdout.text).toContain('pii: none');
+    expect(off.stdout.text).not.toContain('pii data:');
+
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\npii:\n  profile: health\n');
+    const on = ctx([]);
+    runScan(on.context, ['e.txt']);
+
+    expect(kinds(on.stdout.text)).toEqual(['health_ref', 'health_date', 'gs1_serial']);
+    expect(on.stdout.text).toMatch(/pii data: [0-9a-f]{12}/);
+  });
+
+  it('leaves the diagnosis alone until icd10 is named, then needs it named in the list', () => {
+    writeFileSync(join(dir, 'e.txt'), epicrisis);
+    writeFileSync(
+      join(dir, 'guardpolicy.yaml'),
+      'version: 1\npii:\n  profile: health\n  recognizers: [health_ref, icd10]\n',
+    );
+    const { context, stdout } = ctx([]);
+    runScan(context, ['e.txt']);
+
+    expect(kinds(stdout.text)).toEqual(['health_ref', 'icd10']);
+  });
+
+  it('shows the profile in validate and rejects an unknown recogniser id', () => {
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\npii:\n  profile: health\n');
+    const shown = ctx([]);
+    expect(runValidate(shown.context, [])).toBe(EXIT.ok);
+    expect(shown.stdout.text).toContain('pii: on (profile=health, strict_checksum=true)');
+
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\npii:\n  recognizers: [tckm]\n');
+    expect(() => runValidate(ctx([]).context, [])).toThrow(/not valid/);
+  });
+
+  it('rejects an unknown profile name', () => {
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\npii:\n  profile: hippa\n');
+    expect(() => runValidate(ctx([]).context, [])).toThrow(/not valid/);
+  });
+});
+
 const UNSAFE = /[\p{Cc}\p{Cf}\u2028\u2029]/u;
 
 describe('lock', () => {
