@@ -18,6 +18,7 @@ export type SecurityEventKind =
   | 'manifest_mismatch'
   | 'access_denied'
   | 'combination_detected'
+  | 'server_unmatched'
   | 'scan_degraded'
   | 'audit_checkpoint';
 

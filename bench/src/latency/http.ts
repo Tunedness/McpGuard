@@ -197,6 +197,7 @@ function engineGates(auditPath: string): Gates<GatewayCallInput> {
     },
     onList: async (_request, forward) => forward(),
     onRead: async (_request, forward) => forward(),
+    onRequest: async (_request, forward) => forward(),
   };
 }
 

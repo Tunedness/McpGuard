@@ -44,7 +44,9 @@ import { fileLockStore } from '../lock-file.js';
 import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
 import { buildGates, type CallContext, CombinationHistory, resolveIdentity } from '../runtime.js';
+import { checkServerName, reportUnmatchedServer } from '../server-name.js';
 import { NULL_TELEMETRY, OtlpTelemetrySink } from '../telemetry/sink.js';
+import { ulid } from '../ulid.js';
 import { parseServeArgs } from './serve-args.js';
 import { headersFrom, otlpPoster } from './wrap.js';
 
@@ -246,6 +248,16 @@ export async function runServe(context: CliContext, argv: readonly string[]): Pr
   assertPolicyRunnable(loaded.policy, context.env);
   const policy = loaded.policy;
   const definitions = serversOf(parsed, policy, context.env);
+  // The command-line upstream is the one server whose name the operator types; the
+  // policy's own are named by their keys. Under `enforce` a name the policy's
+  // `servers` section does not carry is refused: it would run without the rules
+  // written under `servers.<name>`, roles included.
+  const unmatched = definitions
+    .filter((definition) => definition.source === 'command line')
+    .map((definition) =>
+      checkServerName(policy, definition.name, 'serve', parsed.name !== undefined),
+    )
+    .find((entry) => entry !== undefined);
   if (!isSupportedSessionKey(policy.session.key)) {
     throw new CliError(`session.key "${policy.session.key}" is not supported`, {
       exitCode: EXIT.policy,
@@ -301,6 +313,9 @@ export async function runServe(context: CliContext, argv: readonly string[]): Pr
           onError: (error) => out('telemetry_error', { message: error.message }),
         })
       : NULL_TELEMETRY;
+  if (unmatched !== undefined) {
+    reportUnmatchedServer(unmatched, out, telemetry, Date.now, ulid());
+  }
 
   // One history for every server: a combination rule is about what a session has
   // done, and a session may have done it on two servers. Marks carry the server.

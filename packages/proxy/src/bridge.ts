@@ -9,7 +9,7 @@
  * of has to work.
  *
  * This module imports the engines only through the injected `onCall`,
- * `onList` and `onRead` gates: it knows they turn a request into a result, not
+ * `onList`, `onRead` and `onRequest` gates: it knows they turn a request into a result, not
  * how. That keeps the transport skeleton liftable — see `boundary.test.ts`.
  *
  * A host that serves many callers through one set of gates (the HTTP gateway)
@@ -72,6 +72,14 @@ export interface Gates<C = undefined> {
     forward: () => Promise<ReadResourceResult>,
     context: C,
   ): Promise<ReadResourceResult>;
+  /**
+   * Every other request the downstream sends the server — `resources/list`,
+   * `prompts/get`, `completion/complete` and whatever a method the proxy has never
+   * heard of is called. The host decides whether it goes on; the result is the
+   * server's, untouched. The SDK answers `initialize` and `ping` itself, so they
+   * never arrive here.
+   */
+  onRequest(request: BridgedRequest, forward: () => Promise<Result>, context: C): Promise<Result>;
 }
 
 /** A request as the bridge shows it to a per-call hook. */
@@ -255,7 +263,7 @@ export function createBridge<C = undefined>(options: BridgeOptions<C>): Bridge {
     if (request.method === 'resources/read')
       return guardRead(request as unknown as ReadResourceRequest, ctx);
     const call = await contextOf(request, ctx);
-    return forward(request.method, request.params, ctx, call);
+    return gates.onRequest(request, () => forward(request.method, request.params, ctx, call), call);
   };
   const shared = options.sharedUpstream === true;
   server.fallbackNotificationHandler = async (notification: Notification) => {

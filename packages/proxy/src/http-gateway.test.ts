@@ -87,6 +87,7 @@ async function rig(
     },
     onList: async (_request, forward) => forward(),
     onRead: async (_request, forward) => forward(),
+    onRequest: async (_request, forward) => forward(),
   };
   const gateway = createHttpGateway<GatewayCallInput>({
     servers: [{ name: 'up', target: { url: options.target ?? upstream.url }, gates }],
@@ -858,6 +859,7 @@ async function multiRig(
       },
       onList: async (_request, forward) => forward(),
       onRead: async (_request, forward) => forward(),
+      onRequest: async (_request, forward) => forward(),
     };
     defs.push({ name: server.name, target: { url }, gates });
   }
@@ -1161,6 +1163,7 @@ describe('several servers behind one gateway', () => {
       onCall: async (_r, forward) => forward(),
       onList: async (_r, forward) => forward(),
       onRead: async (_r, forward) => forward(),
+      onRequest: async (_r, forward) => forward(),
     };
     expect(() => createHttpGateway({ ...base, servers: [] })).toThrow(/at least one server/);
     const server = { name: 'a', target: { url: 'http://127.0.0.1:1/mcp' }, gates };

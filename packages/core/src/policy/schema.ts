@@ -375,7 +375,20 @@ export const GuardPolicySchemaV1 = z
            * the `<server>__<tool>` glob in `scan.tools` and `tools`.
            */
           pii: z.strictObject({ enabled: z.boolean() }).optional(),
-          roles: z.array(z.string().min(1)).default([]),
+          /**
+           * Roles admitted to this server. When the list names any role, only a
+           * caller holding one of them may send the server anything: `tools/list`,
+           * `tools/call`, `resources/*`, `prompts/*` and every other request it
+           * would be forwarded. A caller with no identity, or none of these roles,
+           * gets a JSON-RPC error (`mode: enforce`) or is flagged and let through
+           * (`mode: flag`). `initialize`, `ping` and `server/discover` belong to the
+           * connection and are not covered. Empty or unset admits every caller. It
+           * combines with `tools` rules, and the stricter of the two wins.
+           */
+          roles: z.array(z.string().min(1)).default([]).meta({
+            description:
+              'Roles admitted to this server. When non-empty, only a caller holding one of them may send the server any request: tools/list, tools/call, resources/*, prompts/* and every other request that would be forwarded. A caller with no identity or none of these roles gets a JSON-RPC error (enforce) or is flagged and let through (flag). initialize, ping and server/discover are connection-level and not covered. Empty or unset admits every caller. Combined with `tools` rules, the stricter wins.',
+          }),
         }),
       )
       .default({}),

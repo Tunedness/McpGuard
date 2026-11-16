@@ -1249,7 +1249,100 @@ sunucu), `manifest-gate.test.ts` (tek kilit iki sunucu), `runtime-context.test.t
 - **Kimlik doğrulama yönlendirmeden önce.** `auth.tokens` tanımlıyken token'sız istek, sunucu
   adı var olsun olmasın aynı `401`'i alır; hangi sunucuların sunulduğu token'sız öğrenilemez.
   `/healthz` açık kalır.
-- Bir sunucunun politika `servers.<ad>.roles` alanı hâlâ okunmuyor (Faz 19 öncesi de öyleydi).
+- Bir sunucunun politika `servers.<ad>.roles` alanı Faz 19'da hâlâ okunmuyordu; Faz 27 erişim kararına bağladı.
 - `bench/src/latency/http.ts` yalnız yeni `servers: [...]` imzası için güncellendi;
   `npm run bench:latency:http` p95 legacy 1,56 ms, modern 1,81 ms (bütçe 20 ms).
 
+## Faz 27 — `servers.<ad>.roles` erişim kararına bağlandı (bitti)
+
+Politika şemasında `servers.<ad>.roles` vardı ama kodda hiçbir yerde okunmuyordu (v0.1.0'dan
+beri). Operatör bununla bir sunucuyu kısıtladığını sanabilirdi; alan sessizce yok sayılıyordu.
+PRD P0 "araç ve sunucu bazında allow/deny; istemci kimliğine göre rol eşleme".
+
+```
+packages/core/src/policy/compile.ts    CompiledPolicy.serverRolesFor(sunucu)
+packages/core/src/policy/evaluate.ts   evaluateServerAccess (tek soru); evaluateAccess onu kullanır
+packages/core/src/policy/schema.ts     alanın açıklaması (JSON Schema'ya da yansır)
+packages/proxy/src/bridge.ts           Gates.onRequest: üç özel kapısı olmayan her istek
+packages/cli/src/runtime.ts            kapıların hepsinde sunucu kontrolü; ServerAccessError
+packages/cli/src/server-name.ts        checkServerName: eşleşmeyen sunucu adı (enforce: dur, flag: uyar); wrap ve serve çağırır
+packages/cli/src/testing/fixtures/catalog-server.mjs   araç + resource + template + prompt sunan fixture
+```
+
+### Davranış
+
+- **Anlam.** `servers.<ad>.roles` bir ya da daha fazla rol içeriyorsa o sunucuya giden **her istek**
+  yalnız bu rollerden birine sahip çağıranlardan kabul edilir. Çağıranın rolleri üst düzey `roles`
+  haritasından, ADR-010 kimlik merdiveniyle çözülen kimlikle gelir. Kimliği olmayan çağıran hiçbir
+  rol taşımaz, dolayısıyla reddedilir. Liste boş ya da tanımsızsa (şema varsayılanı `[]`) sunucu
+  herkese açıktır; bu, araç kuralındaki boş `roles` okumasıyla aynıdır. Politikada olmayan sunucu
+  adı kısıtsızdır.
+- **Kapsam (kullanıcı kararı 2026-11-16).** Kapsanan yöntemler: `tools/list`, `tools/call`,
+  `resources/list`, `resources/read`, `resources/templates/list`, `resources/subscribe`,
+  `resources/unsubscribe`, `prompts/list`, `prompts/get`, `completion/complete`, `logging/setLevel`,
+  `tasks/*`, `subscriptions/listen` ve proxy'nin adını bilmediği her istek: üç özel kapısı olmayan
+  her şey `Gates.onRequest`'ten (köprünün fallback yolu) geçer.
+  **Kapsam dışı (bağlantı düzeyi):** `initialize`, `ping` (SDK'nın kendisi yanıtlar, kapılara
+  ulaşmaz) ve `server/discover` (modern era'nın `initialize`'ı; çağıran kendini adlandırmadan
+  önce sunucunun ne olduğunu öğrenir, `runtime.ts` `CONNECTION_LEVEL_METHODS`). Bildirimler
+  (`notifications/*`) istek değildir, kapsam dışıdır; upstream'in istemciye yönelik istekleri
+  (sampling, elicitation, roots) sunucuya giden istek değildir, kapsam dışıdır.
+- **Ret biçimi.** `tools/call` bugüne kadarki gibi `isError` sonucu (`content withheld`) döner.
+  Öteki yöntemler açık bir JSON-RPC hatasıyla reddedilir (`[mcpguard] <yöntem> refused · the caller
+  holds none of the roles this server admits ...`); boş liste ya da boş sonuç dönmez. Hata metni
+  hangi rollerin yeteceğini söylemez. Upstream'e hiç gidilmez.
+- **Tek yer.** Soru `evaluateServerAccess`'te (core) sorulur; `evaluateAccess` (`tools/call`) onu
+  çağırır, `runtime.ts` öteki yöntemler için aynısını çağırır. `wrap` ve `serve` aynı `buildGates`'ten
+  geçtiği için ikisi ayrışamaz. `tools/call`'da sunucu kontrolü manifest kapısından da önce yapılır:
+  reddedilen çağıran proxy'nin upstream'i okumasına ya da kilide dokunmasına yol açamaz.
+- **Birleşme.** Sunucu listesi önce sorulur; reddederse `deny` ve araç kuralı sorulmaz, yani bir
+  `allow` kuralı kapalı sunucuyu yeniden açamaz. Listeden geçen çağrıyı araç kuralı yine
+  reddedebilir. Daha kısıtlayıcı olan kazanır.
+- **Kayıt.** Ret `access_denied` (stderr; `method`, `rule`, `action`, kimlik ve basamağı), `policy_decision`/
+  `access_denied` security_event ve audit kaydı olarak yazılır. Audit `kind`: `tools/call` için
+  `tool_call`, `tools/list` için `tool_list`, `resources/read` için `resource_read` (`toolName` uri),
+  öteki yöntemler için `access_denied` (`toolName` yöntem adı). `findings` ve `evidence`
+  `servers.<ad>.roles` alanını adlandırır, `callerIdentity` kimlik basamağını ve `exact` bilgisini
+  taşır (ADR-010). Rol `clientInfo.name`'den çözüldüyse kayıt `source: client_info, exact: false` der;
+  davranış değişmez. stderr `access_denied` olayı artık enforce'ta da `action: deny` taşır.
+- **`mode: flag`.** İstek iletilir; aynı üç kayıt `action: flag` ile yazılır. (Araç kuralı `deny`'ı
+  flag modunda bugüne kadar olduğu gibi kayıtsız geçer; bu fazda dokunulmadı.) Flag modunda istek
+  ayrıca normal sonuç kaydını da üretir; bir çağrı için iki kayıt görülebilir (kombinasyon kuralının
+  flag yolu da aynısını yapar).
+- **Sunucu adı politikayla eşleşmeli (kullanıcı kararı 2026-11-16).** `servers.<ad>` çalışan sunucunun
+  adıyla aranır: `wrap`'te `--name` (verilmezse `server`), `serve`'de komut satırı upstream'inin
+  `--name`'i (verilmezse `server`); politikada `upstream` ile tanımlı sunucular zaten kendi anahtarıyla
+  çalışır. Adı hiçbir kayıtla eşleşmeyen sunucu `servers.<ad>` kurallarının, roller dahil, hiçbirine
+  tabi olmaz; bir yazım hatası güvenceyi sessizce düşürür. Bu yüzden, politikada bir `servers`
+  bölümü varsa:
+  - `mode: enforce`: `wrap` ve `serve` açılışta durur, `EXIT.policy` (3). Mesaj eşleşmeyen adı
+    (`--name` verilmediyse bunu da), politikanın bildiği anahtarları ve kaçış yolunu söyler. `serve`
+    dinlemeye başlamadan önce durur.
+  - `mode: flag`: stderr'e `server_unmatched` olayı (eşleşmeyen ad, bilinen anahtarlar, ipucu) ve
+    `security_event` (`kind: server_unmatched`, `action: flag`) yazılır, süreç devam eder.
+  - **Kaçış yolu:** kısıtsız çalışması istenen sunucu için politikaya boş bir kayıt: `servers: { <ad>: {} }`.
+  - `servers` bölümü yoksa ya da boşsa kontrol yoktur (bugünkü davranış). Eşleşme sahip anahtarla
+    yapılır (`Object.hasOwn`), `constructor`/`toString` gibi adlar politikanın adlandırdığı sunucu sayılmaz.
+  - Kontrol `packages/cli/src/server-name.ts`'te tek yerdedir (`checkServerName`); `wrap` ve `serve`
+    aynısını çağırır. `mcpguard validate` çalışan sunucunun adını bilmediği için bunu yakalayamaz
+    (`validate` yalnız politika dosyasına bakar); kontrol `wrap`/`serve` açılışındadır.
+- Alan tanımsızsa hiçbir şey değişmez: mevcut testler değişmeden geçer.
+
+### Doğrulama
+
+Birim: `policy.test.ts` (`evaluateAccess` ve sunucu listesi), `runtime.test.ts` (`wrap` yolu: her yöntem
+ailesi için ret/izin, kimliksiz, sezgisel kimlik, flag modu, bağlantı düzeyi yöntemler, manifest
+kapısından önce ret, stricter-wins), `runtime-context.test.ts` (`serve` yolu, çağrı başına kimlik, her
+aile), `server-name.test.ts` (ad kontrolü: `wrap`/`serve` × `enforce` süreç içinde, prototip anahtarları). Süreç düzeyi: `wrap-identity.test.ts` (gerçek stdio, `catalog-server`: araç, resource, template,
+prompt; `wrap` × `flag`/`enforce` ad kontrolü) ve `serve-process.test.ts` (gerçek `serve`, token kimliği,
+iki era, aynı fixture; `serve` komut satırı upstream'i × `flag`/`enforce`).
+
+### Bilinmesi gerekenler
+
+- Alan boş liste ile "tanımsız"ı ayırt etmez; "kimse giremez" yazmanın yolu yok (rolü olmayan bir
+  ad listelenebilir). Şema bunu daha önce de ayırt etmiyordu.
+- `Gates` arayüzüne `onRequest` eklendi (zorunlu); `Gates` kuran dış kod varsa tipi kırılır.
+- `mode: flag` altında araç kuralı `deny`'ı kayıt üretmiyor; sunucu listesi üretiyor. Tutarsızlık
+  Faz 27'den önce de vardı (araç kuralı tarafı), kapsam dışı bırakıldı.
+- Araç düzeyi `tools` kuralları hâlâ yalnız `tools/call`'ı kapsar; `resources/read` ve `prompts/*`
+  için kural yazılamaz, yalnız sunucu listesi bunları kapatır.

@@ -192,6 +192,58 @@ describe('evaluateAccess', () => {
   });
 });
 
+describe('evaluateAccess and servers.<name>.roles', () => {
+  const policy = compilePolicy(
+    parsePolicy({
+      version: 1,
+      roles: { alice: ['reader'], bob: ['admin', 'ops'] },
+      servers: { fs: { roles: ['admin'] }, db: {}, mail: { roles: [] } },
+      tools: [{ match: 'fs__rm', action: 'deny', roles: ['admin'] }],
+    }),
+  );
+
+  it('refuses a caller who holds none of the listed roles, and names the field', () => {
+    const decision = evaluateAccess(policy, 'fs', 'read_file', 'alice');
+
+    expect(decision).toMatchObject({
+      action: 'deny',
+      matchedRule: 'servers.fs.roles',
+      refusedByServer: true,
+      roles: ['reader'],
+    });
+  });
+
+  it('refuses a caller with no identity, and one nobody mapped', () => {
+    expect(evaluateAccess(policy, 'fs', 'read_file', undefined).action).toBe('deny');
+    expect(evaluateAccess(policy, 'fs', 'read_file', 'carol').refusedByServer).toBe(true);
+  });
+
+  it('admits a caller holding any one of the listed roles', () => {
+    const decision = evaluateAccess(policy, 'fs', 'read_file', 'bob');
+
+    expect(decision).toMatchObject({ action: 'allow', refusedByServer: false });
+  });
+
+  it('lets a tool rule deny a caller the server list admitted', () => {
+    const decision = evaluateAccess(policy, 'fs', 'rm', 'bob');
+
+    expect(decision).toMatchObject({
+      action: 'deny',
+      matchedRule: 'tools[0]',
+      refusedByServer: false,
+    });
+  });
+
+  it('leaves a server with an unset or empty list, and an unlisted one, open to everyone', () => {
+    for (const server of ['db', 'mail', 'unlisted']) {
+      expect(evaluateAccess(policy, server, 'any', undefined)).toMatchObject({
+        action: 'allow',
+        refusedByServer: false,
+      });
+    }
+  });
+});
+
 describe('evaluateCombinations', () => {
   const policy = compilePolicy(
     parsePolicy({

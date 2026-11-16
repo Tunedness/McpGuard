@@ -11,6 +11,7 @@ import {
   type CallMark,
   type CompiledPolicy,
   evaluateCombinations,
+  evaluateServerAccess,
   type GuardPolicy,
   type IdentityResolution,
   type SecurityEvent,
@@ -323,7 +324,39 @@ export interface GuardGates {
     forward: Parameters<Gates<CallContext>['onRead']>[1],
     context?: CallContext,
   ): ReturnType<Gates<CallContext>['onRead']>;
+  onRequest(
+    request: Parameters<Gates<CallContext>['onRequest']>[0],
+    forward: Parameters<Gates<CallContext>['onRequest']>[1],
+    context?: CallContext,
+  ): ReturnType<Gates<CallContext>['onRequest']>;
 }
+
+/**
+ * Thrown to refuse a request the server's role list does not admit, so the
+ * client gets a JSON-RPC error and not an empty list or an empty result. The
+ * message is safe to hand to the client: it names the method it sent and nothing
+ * about which roles would have been enough.
+ */
+export class ServerAccessError extends Error {
+  constructor(method: string) {
+    super(
+      `[mcpguard] ${method.slice(0, 64)} refused · the caller holds none of the roles this server admits · check the identity and servers.<name>.roles`,
+    );
+    this.name = 'ServerAccessError';
+  }
+}
+
+/**
+ * Messages that belong to the connection and not to the server behind it. The SDK
+ * answers `initialize` and `ping` itself and they never reach the gates;
+ * `server/discover` is the modern era's `initialize`, a client learning what the
+ * server is before it names a caller, so it is let through here for the same reason.
+ */
+const CONNECTION_LEVEL_METHODS: ReadonlySet<string> = new Set([
+  'initialize',
+  'ping',
+  'server/discover',
+]);
 
 /** Builds the gates for one server. */
 export function buildGates(deps: RuntimeDeps): GuardGates {
@@ -391,7 +424,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
 
   const record = (
     call: CallContext,
-    kind: 'tool_call' | 'resource_read' | 'tool_list',
+    kind: 'tool_call' | 'resource_read' | 'tool_list' | 'access_denied',
     toolName: string | undefined,
     action: string,
     score: number | undefined,
@@ -421,6 +454,57 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       },
       raw,
     );
+  };
+
+  /**
+   * Writes down that the server's role list does not admit this caller, in the
+   * three places a refusal goes (stderr, the security event, the audit record).
+   * Under `flag` the request still goes ahead and the record says `flag`; the
+   * caller refuses on its own when `enforce` is set. `identityExact: false` is a
+   * guessed role, not a granted one (ADR-010).
+   */
+  const reportServerRefusal = (
+    call: CallContext,
+    method: string,
+    subject: string | undefined,
+    kind: 'tool_call' | 'resource_read' | 'tool_list' | 'access_denied',
+    rule: string | undefined,
+  ): void => {
+    const action = enforce ? 'deny' : 'flag';
+    const caller = call.identity;
+    const named = subject?.slice(0, MAX_DIFF_NAME_LENGTH);
+    notify(call, 'access_denied', {
+      method,
+      ...(method === 'tools/call' && named !== undefined ? { tool: named } : {}),
+      ...(method === 'resources/read' && named !== undefined ? { resource: named } : {}),
+      rule,
+      action,
+      identity: caller.identity,
+      identitySource: caller.source,
+      identityExact: caller.exact,
+    });
+    emit(call, 'access_denied', 'policy_decision', named, action, undefined, [rule ?? '']);
+    record(call, kind, named, action, undefined, [rule ?? ''], [], '', '');
+  };
+
+  /**
+   * Asks the server's role list about one request that is not a `tools/call`.
+   * True when it must be refused; under `flag` it is reported and goes ahead.
+   */
+  const serverRefuses = (
+    call: CallContext,
+    method: string,
+    subject: string | undefined,
+    kind: 'resource_read' | 'tool_list' | 'access_denied',
+  ): boolean => {
+    const access = evaluateServerAccess(
+      deps.compiledPolicy,
+      deps.serverName,
+      call.identity.identity,
+    );
+    if (!access.refused) return false;
+    reportServerRefusal(call, method, subject, kind, access.matchedRule);
+    return enforce;
   };
 
   const scanTool = toolScanner(deps);
@@ -657,6 +741,16 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
     onCall: async (request, forward, given) => {
       const call = contextOf(given);
       const toolName = String(request.params?.name ?? 'unknown');
+      // The caller's identity, not the session id: a ULID is minted per
+      // connection and no role mapping can ever name it (ADR-010).
+      const caller = call.identity;
+      const access = guardCall(contextFor(toolName), deps.serverName, toolName, caller.identity);
+      // First, before the manifest gate: a caller the server does not admit must
+      // not be able to make the proxy read the upstream or touch the lock.
+      if (access.refusedByServer) {
+        reportServerRefusal(call, 'tools/call', toolName, 'tool_call', access.matchedRule);
+        if (enforce) return blockedResult('deny', 0, deps.ruleset.rulesetVersion) as never;
+      }
       // A list the gate refused leaves no open door: the call is refused too,
       // until a later `tools/list` passes. Not downgraded in observe mode, for
       // the same reason the list is not: `lock.on_mismatch` is the operator's
@@ -681,14 +775,11 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
         );
         throw refused;
       }
-      // The caller's identity, not the session id: a ULID is minted per
-      // connection and no role mapping can ever name it (ADR-010).
-      const caller = call.identity;
-      const access = guardCall(contextFor(toolName), deps.serverName, toolName, caller.identity);
       if (access.action === 'deny' && enforce) {
         notify(call, 'access_denied', {
           tool: toolName,
           rule: access.matchedRule,
+          action: 'deny',
           identity: caller.identity,
           identitySource: caller.source,
           identityExact: caller.exact,
@@ -748,11 +839,28 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       }
       return guarded.result as never;
     },
-    onList: async (request, forward, given) =>
-      manifest !== undefined ? manifest.onList(request, forward, contextOf(given)) : forward(),
+    onList: async (request, forward, given) => {
+      const call = contextOf(given);
+      if (serverRefuses(call, 'tools/list', undefined, 'tool_list')) {
+        throw new ServerAccessError('tools/list');
+      }
+      return manifest !== undefined ? manifest.onList(request, forward, call) : forward();
+    },
+    onRequest: async (request, forward, given) => {
+      if (!CONNECTION_LEVEL_METHODS.has(request.method)) {
+        const call = contextOf(given);
+        if (serverRefuses(call, request.method, request.method, 'access_denied')) {
+          throw new ServerAccessError(request.method);
+        }
+      }
+      return forward();
+    },
     onRead: async (request, forward, given) => {
       const call = contextOf(given);
       const uri = String(request.params?.uri ?? 'unknown');
+      if (serverRefuses(call, 'resources/read', uri, 'resource_read')) {
+        throw new ServerAccessError('resources/read');
+      }
       const upstream = await forward();
       const guarded = guardResource(contextFor(uri), deps.serverName, uri, upstream);
       const findings = guarded.verdicts.flatMap((v) => v.findings.map((f) => f.ruleId));

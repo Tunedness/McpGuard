@@ -72,6 +72,7 @@ export type {
   ScanAction,
   ScanSettings,
   ScanSettingsOverride,
+  ServerAccess,
   ToolRule,
 } from './policy/index.js';
 export {
@@ -82,6 +83,7 @@ export {
   defaultPolicy,
   evaluateAccess,
   evaluateCombinations,
+  evaluateServerAccess,
   GuardPolicySchemaV1,
   globMatches,
   PolicyValidationError,

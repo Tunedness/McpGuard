@@ -47,6 +47,12 @@ export interface CompiledPolicy {
   scanFor(serverName: string, toolName: string): ScanSettings;
   /** Roles the policy grants a caller identity. */
   rolesFor(identity: string | undefined): ReadonlySet<string>;
+  /**
+   * The roles `servers.<name>.roles` admits to one server. Empty means the
+   * server is open to every caller, the same reading an empty `roles` list has
+   * on a tool rule.
+   */
+  serverRolesFor(serverName: string): ReadonlySet<string>;
 }
 
 const NO_ROLES: ReadonlySet<string> = new Set();
@@ -78,6 +84,10 @@ export function compilePolicy(policy: GuardPolicy): CompiledPolicy {
     Object.entries(policy.roles).map(([identity, roles]) => [identity, new Set(roles)]),
   );
 
+  const serverRoleMap = new Map<string, ReadonlySet<string>>(
+    Object.entries(policy.servers).map(([name, server]) => [name, new Set(server.roles)]),
+  );
+
   return {
     policy,
     rules,
@@ -104,6 +114,9 @@ export function compilePolicy(policy: GuardPolicy): CompiledPolicy {
     rolesFor(identity) {
       if (identity === undefined) return NO_ROLES;
       return roleMap.get(identity) ?? NO_ROLES;
+    },
+    serverRolesFor(serverName) {
+      return serverRoleMap.get(serverName) ?? NO_ROLES;
     },
   };
 }

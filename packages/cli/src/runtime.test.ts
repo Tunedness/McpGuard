@@ -18,6 +18,7 @@ import {
   MAX_HISTORY_SESSIONS,
   MAX_TRACKED_NAME_LENGTH,
   resolveIdentity,
+  ServerAccessError,
 } from './runtime.js';
 
 /**
@@ -298,6 +299,290 @@ describe('access decisions use the caller identity', () => {
     const result = await gates.onCall(callRequest, textResult('x'));
 
     expect(isRefused(result)).toBe(false);
+  });
+});
+
+describe('servers.<name>.roles on the wrap path', () => {
+  const policy = {
+    mode: 'enforce',
+    roles: { alice: ['reader'], bob: ['admin'] },
+    servers: { echo: { roles: ['admin'] } },
+  };
+  const isRefused = (result: unknown): boolean =>
+    (result as { isError?: boolean }).isError === true;
+  const forwarding = () => {
+    const state = { forwarded: false };
+    const forward = async () => {
+      state.forwarded = true;
+      return { content: [{ type: 'text', text: 'x' }] } as never;
+    };
+    return { state, forward };
+  };
+
+  it('refuses a caller whose roles the server list does not name, and never forwards it', async () => {
+    const { gates, records, events } = rig({
+      policy,
+      identity: resolveIdentity({ flag: 'alice' }),
+    });
+    const { state, forward } = forwarding();
+    const result = await gates.onCall(callRequest, forward);
+
+    expect(isRefused(result)).toBe(true);
+    expect(state.forwarded).toBe(false);
+    const [record] = records();
+    expect(record).toMatchObject({
+      action: 'deny',
+      findings: ['servers.echo.roles'],
+      callerIdentity: { identity: 'alice', source: 'flag', exact: true },
+    });
+    expect(events[0]).toMatchObject({
+      kind: 'access_denied',
+      action: 'deny',
+      evidence: ['servers.echo.roles'],
+      callerIdentity: { identity: 'alice', source: 'flag', exact: true },
+    });
+  });
+
+  it('lets a caller holding one of the listed roles through', async () => {
+    const { gates } = rig({ policy, identity: resolveIdentity({ flag: 'bob' }) });
+    const { state, forward } = forwarding();
+
+    expect(isRefused(await gates.onCall(callRequest, forward))).toBe(false);
+    expect(state.forwarded).toBe(true);
+  });
+
+  it('refuses a caller with no identity at all', async () => {
+    const { gates, records } = rig({ policy });
+    const { state, forward } = forwarding();
+
+    expect(isRefused(await gates.onCall(callRequest, forward))).toBe(true);
+    expect(state.forwarded).toBe(false);
+    expect(records()[0]?.callerIdentity).toEqual({ source: 'none', exact: false });
+  });
+
+  it('says in the record when the role came from a guess', async () => {
+    const { gates, records } = rig({ policy, identity: resolveIdentity({ clientName: 'bob' }) });
+    const { forward } = forwarding();
+    await gates.onCall(callRequest, forward);
+    const allowed = records()[0];
+    expect(allowed?.callerIdentity).toEqual({
+      identity: 'bob',
+      source: 'client_info',
+      exact: false,
+    });
+
+    const denied = rig({ policy, identity: resolveIdentity({ clientName: 'alice' }) });
+    expect(isRefused(await denied.gates.onCall(callRequest, forwarding().forward))).toBe(true);
+    expect(denied.records()[0]).toMatchObject({
+      action: 'deny',
+      callerIdentity: { identity: 'alice', source: 'client_info', exact: false },
+    });
+  });
+
+  it('flags and forwards under mode flag, and records the flag', async () => {
+    const { gates, records, events } = rig({
+      policy: { ...policy, mode: 'flag' },
+      identity: resolveIdentity({ flag: 'alice' }),
+    });
+    const { state, forward } = forwarding();
+    const result = await gates.onCall(callRequest, forward);
+
+    expect(isRefused(result)).toBe(false);
+    expect(state.forwarded).toBe(true);
+    const flagged = records().find((r) => (r.findings as string[]).includes('servers.echo.roles'));
+    expect(flagged?.action).toBe('flag');
+    expect(events.find((e) => e.kind === 'access_denied')?.action).toBe('flag');
+  });
+
+  it('takes the stricter of the server list and a tool rule', async () => {
+    // The server list lets bob in, and the tool rule then keeps him out.
+    const toolDeny = rig({
+      policy: { ...policy, tools: [{ match: 'echo__echo', action: 'deny', roles: ['admin'] }] },
+      identity: resolveIdentity({ flag: 'bob' }),
+    });
+    expect(isRefused(await toolDeny.gates.onCall(callRequest, forwarding().forward))).toBe(true);
+
+    // A tool rule that allows cannot reopen a server the list closed to alice.
+    const serverDeny = rig({
+      policy: { ...policy, tools: [{ match: 'echo__*', action: 'allow' }] },
+      identity: resolveIdentity({ flag: 'alice' }),
+    });
+    expect(isRefused(await serverDeny.gates.onCall(callRequest, forwarding().forward))).toBe(true);
+  });
+
+  it('leaves another server, and an empty list, unrestricted', async () => {
+    for (const servers of [{ other: { roles: ['admin'] } }, { echo: { roles: [] } }]) {
+      const { gates } = rig({
+        policy: { ...policy, servers },
+        identity: resolveIdentity({ flag: 'alice' }),
+      });
+      expect(isRefused(await gates.onCall(callRequest, forwarding().forward))).toBe(false);
+    }
+  });
+});
+
+describe('servers.<name>.roles on every method, on the wrap path', () => {
+  const policy = {
+    mode: 'enforce',
+    roles: { alice: ['reader'], bob: ['admin'] },
+    servers: { echo: { roles: ['admin'] } },
+  };
+  const listRequest = { method: 'tools/list', params: {} } as never;
+  const readRequest = { method: 'resources/read', params: { uri: 'note://hello' } } as never;
+  const other = (method: string) => ({ method, params: {} }) as never;
+  const advertise = async () => ({ tools: [{ name: 'lookup', description: 'x' }] }) as never;
+  const readNote = async () =>
+    ({ contents: [{ uri: 'note://hello', type: 'text', text: 'the note' }] }) as never;
+  const otherResult = async () => ({ resources: [] }) as never;
+
+  it('refuses tools/list with an error, not an empty list, and never asks the upstream', async () => {
+    const { gates, records } = rig({ policy, identity: resolveIdentity({ flag: 'alice' }) });
+    let asked = false;
+    await expect(
+      gates.onList(listRequest, async () => {
+        asked = true;
+        return advertise();
+      }),
+    ).rejects.toBeInstanceOf(ServerAccessError);
+    expect(asked).toBe(false);
+    expect(records()[0]).toMatchObject({
+      kind: 'tool_list',
+      action: 'deny',
+      findings: ['servers.echo.roles'],
+      callerIdentity: { identity: 'alice', source: 'flag', exact: true },
+    });
+  });
+
+  it('refuses resources/read with an error and records the uri it was for', async () => {
+    const { gates, records } = rig({ policy, identity: resolveIdentity({ flag: 'alice' }) });
+    await expect(gates.onRead(readRequest, readNote)).rejects.toBeInstanceOf(ServerAccessError);
+    expect(records()[0]).toMatchObject({
+      kind: 'resource_read',
+      toolName: 'note://hello',
+      action: 'deny',
+      findings: ['servers.echo.roles'],
+    });
+  });
+
+  it.each([
+    'resources/list',
+    'resources/templates/list',
+    'prompts/list',
+    'prompts/get',
+    'completion/complete',
+    'resources/subscribe',
+    'some/method-nobody-has-heard-of',
+  ])('refuses %s, a method with no gate of its own', async (method) => {
+    const { gates, records, events } = rig({
+      policy,
+      identity: resolveIdentity({ flag: 'alice' }),
+    });
+    let asked = false;
+    await expect(
+      gates.onRequest(other(method), async () => {
+        asked = true;
+        return otherResult();
+      }),
+    ).rejects.toThrow(/refused · the caller holds none of the roles this server admits/);
+    expect(asked).toBe(false);
+    expect(records()[0]).toMatchObject({
+      kind: 'access_denied',
+      toolName: method,
+      action: 'deny',
+      findings: ['servers.echo.roles'],
+    });
+    expect(events[0]).toMatchObject({ kind: 'access_denied', action: 'deny', toolName: method });
+  });
+
+  it('does not put the roles the server admits in the error the client reads', async () => {
+    const { gates } = rig({ policy, identity: resolveIdentity({ flag: 'alice' }) });
+    const error = await gates.onRequest(other('prompts/list'), otherResult).catch((e) => e);
+    expect(String(error.message)).not.toContain('admin');
+  });
+
+  it('lets the admitted caller through on each of them, and forwards what the server said', async () => {
+    const { gates } = rig({ policy, identity: resolveIdentity({ flag: 'bob' }) });
+
+    expect((await gates.onList(listRequest, advertise)).tools).toHaveLength(1);
+    expect((await gates.onRead(readRequest, readNote)).contents).toHaveLength(1);
+    expect(await gates.onRequest(other('prompts/list'), otherResult)).toEqual({ resources: [] });
+  });
+
+  it('leaves the connection-level messages alone, whoever asks', async () => {
+    const { gates, records } = rig({ policy });
+    for (const method of ['initialize', 'ping', 'server/discover']) {
+      expect(await gates.onRequest(other(method), otherResult)).toEqual({ resources: [] });
+    }
+    expect(records()).toEqual([]);
+  });
+
+  it('flags and forwards each of them under mode flag', async () => {
+    const { gates, records, events } = rig({
+      policy: { ...policy, mode: 'flag' },
+      identity: resolveIdentity({ flag: 'alice' }),
+    });
+    expect((await gates.onList(listRequest, advertise)).tools).toHaveLength(1);
+    expect((await gates.onRead(readRequest, readNote)).contents).toHaveLength(1);
+    expect(await gates.onRequest(other('prompts/get'), otherResult)).toEqual({ resources: [] });
+
+    const flagged = records().filter((r) =>
+      (r.findings as string[]).includes('servers.echo.roles'),
+    );
+    expect(flagged.map((r) => r.kind)).toEqual(['tool_list', 'resource_read', 'access_denied']);
+    expect(flagged.every((r) => r.action === 'flag')).toBe(true);
+    expect(events.filter((e) => e.kind === 'access_denied').map((e) => e.action)).toEqual([
+      'flag',
+      'flag',
+      'flag',
+    ]);
+  });
+
+  it('refuses a caller with no identity on every method, and says a guessed role is a guess', async () => {
+    const none = rig({ policy });
+    await expect(none.gates.onList(listRequest, advertise)).rejects.toBeInstanceOf(
+      ServerAccessError,
+    );
+    expect(none.records()[0]?.callerIdentity).toEqual({ source: 'none', exact: false });
+
+    const guessed = rig({ policy, identity: resolveIdentity({ clientName: 'alice' }) });
+    await expect(guessed.gates.onRead(readRequest, readNote)).rejects.toBeInstanceOf(
+      ServerAccessError,
+    );
+    expect(guessed.records()[0]?.callerIdentity).toEqual({
+      identity: 'alice',
+      source: 'client_info',
+      exact: false,
+    });
+  });
+
+  it('refuses tools/call before the manifest gate can touch the lock or the upstream', async () => {
+    const touched = { lock: false };
+    const lock = {
+      path: '/memory/guardlock.json',
+      read: () => {
+        touched.lock = true;
+        return { kind: 'absent' as const };
+      },
+      write: () => {
+        touched.lock = true;
+      },
+    };
+    const refusedCaller = rig({ policy, identity: resolveIdentity({ flag: 'alice' }), lock });
+    const result = await refusedCaller.gates.onCall(callRequest, textResult('x'));
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(touched.lock).toBe(false);
+
+    // The same wiring does touch the lock for a caller the server admits, so the
+    // check above is not passing because the lock is never read.
+    const admitted = rig({ policy, identity: resolveIdentity({ flag: 'bob' }), lock });
+    await admitted.gates.onCall(callRequest, textResult('x')).catch(() => {});
+    expect(touched.lock).toBe(true);
+  });
+
+  it('leaves every method open on a server the policy does not restrict', async () => {
+    const { gates } = rig({ policy: { ...policy, servers: {} } });
+    expect((await gates.onList(listRequest, advertise)).tools).toHaveLength(1);
+    expect(await gates.onRequest(other('prompts/list'), otherResult)).toEqual({ resources: [] });
   });
 });
 

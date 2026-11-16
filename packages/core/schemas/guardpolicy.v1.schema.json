@@ -82,6 +82,7 @@
           },
           "roles": {
             "default": [],
+            "description": "Roles admitted to this server. When non-empty, only a caller holding one of them may send the server any request: tools/list, tools/call, resources/*, prompts/* and every other request that would be forwarded. A caller with no identity or none of these roles gets a JSON-RPC error (enforce) or is flagged and let through (flag). initialize, ping and server/discover are connection-level and not covered. Empty or unset admits every caller. Combined with `tools` rules, the stricter wins.",
             "type": "array",
             "items": {
               "type": "string",

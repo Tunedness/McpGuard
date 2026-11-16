@@ -127,6 +127,61 @@ describe('a call context', () => {
     expect(asBob.content[0]?.text).toBe('hi');
   });
 
+  it('decides servers.<name>.roles on the caller each call names, as it does on one connection', async () => {
+    const { gates, records } = rig({
+      mode: 'enforce',
+      roles: { alice: ['reader'], bob: ['admin'] },
+      servers: { echo: { roles: ['admin'] } },
+    });
+    const asAlice = (await gates.onCall(call(), answer('hi'), context({}, 'alice'))) as {
+      isError?: boolean;
+    };
+    const asBob = (await gates.onCall(call(), answer('hi'), context({}, 'bob'))) as {
+      content: { text: string }[];
+    };
+    expect(asAlice.isError).toBe(true);
+    expect(asBob.content[0]?.text).toBe('hi');
+    expect(records()[0]).toMatchObject({
+      action: 'deny',
+      findings: ['servers.echo.roles'],
+      callerIdentity: { identity: 'alice', source: 'token', exact: true },
+    });
+  });
+
+  it('decides servers.<name>.roles on each request family from the context it names', async () => {
+    const { gates, records } = rig({
+      mode: 'enforce',
+      roles: { alice: ['reader'], bob: ['admin'] },
+      servers: { echo: { roles: ['admin'] } },
+    });
+    const list = { method: 'tools/list', params: {} } as never;
+    const read = { method: 'resources/read', params: { uri: 'note://hello' } } as never;
+    const prompts = { method: 'prompts/list', params: {} } as never;
+    const tools = async () => ({ tools: [] }) as never;
+    const note = async () => ({ contents: [] }) as never;
+    const none = async () => ({ prompts: [] }) as never;
+
+    await expect(gates.onList(list, tools, context({}, 'alice'))).rejects.toThrow(/refused/);
+    await expect(gates.onRead(read, note, context({}, 'alice'))).rejects.toThrow(/refused/);
+    await expect(gates.onRequest(prompts, none, context({}, 'alice'))).rejects.toThrow(/refused/);
+    expect(await gates.onList(list, tools, context({}, 'bob'))).toEqual({ tools: [] });
+    expect(await gates.onRead(read, note, context({}, 'bob'))).toEqual({ contents: [] });
+    expect(await gates.onRequest(prompts, none, context({}, 'bob'))).toEqual({ prompts: [] });
+
+    const refusals = records().filter((r) => (r.findings as string[]).length > 0);
+    expect(refusals.map((r) => [r.kind, r.action])).toEqual([
+      ['tool_list', 'deny'],
+      ['resource_read', 'deny'],
+      ['access_denied', 'deny'],
+    ]);
+    for (const record of refusals) {
+      expect(record).toMatchObject({
+        findings: ['servers.echo.roles'],
+        callerIdentity: { identity: 'alice', source: 'token', exact: true },
+      });
+    }
+  });
+
   it('keeps each session its own combination history', async () => {
     const policy = {
       mode: 'enforce',

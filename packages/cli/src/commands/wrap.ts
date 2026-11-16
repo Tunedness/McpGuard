@@ -19,6 +19,7 @@ import { fileLockStore } from '../lock-file.js';
 import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
 import { buildGates, resolveIdentity } from '../runtime.js';
+import { checkServerName, reportUnmatchedServer } from '../server-name.js';
 import { NULL_TELEMETRY, OtlpTelemetrySink } from '../telemetry/sink.js';
 import { ulid } from '../ulid.js';
 import { parseWrapArgs } from './wrap-args.js';
@@ -70,6 +71,9 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
   assertPolicyRunnable(loaded.policy, context.env);
   const ruleset = loadShippedRuleset();
   const serverName = parsed.name ?? 'server';
+  // Everything under `servers.<name>` is read under this name: a name the policy
+  // does not carry runs unrestricted, so under `enforce` it is refused here.
+  const unmatched = checkServerName(loaded.policy, serverName, 'wrap', parsed.name !== undefined);
   const sessionId = ulid();
   const compiled = compilePolicy(loaded.policy);
 
@@ -99,6 +103,18 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
             ),
         })
       : NULL_TELEMETRY;
+  if (unmatched !== undefined) {
+    reportUnmatchedServer(
+      unmatched,
+      (event, detail) =>
+        context.stderr.write(
+          `[mcpguard] ${escapeUnsafeJson(JSON.stringify({ event, session: sessionId, ...detail }))}\n`,
+        ),
+      telemetry,
+      Date.now,
+      sessionId,
+    );
+  }
 
   // The bridge exists only once the client's first message has named an era, and
   // the identity ladder and the manifest gate read from it, so it is reached

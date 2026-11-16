@@ -20,10 +20,55 @@ export interface AccessEvaluation {
   readonly roles: readonly string[];
   /** The rule's `note`, shown to the agent on a refusal. */
   readonly note: string | undefined;
+  /**
+   * True when `servers.<name>.roles` is what refused the call. `matchedRule` is
+   * then `servers.<name>.roles` and `action` is `deny`, whatever the tool rules
+   * say: a server list closes the server, and no tool rule reopens it.
+   */
+  readonly refusedByServer: boolean;
+}
+
+/** What asking a server's role list about one caller produced. */
+export interface ServerAccess {
+  /** True when the server names roles and the caller holds none of them. */
+  readonly refused: boolean;
+  /** `servers.<name>.roles` when refused, for the report and the audit record. */
+  readonly matchedRule: string | undefined;
+  /** The roles the caller was evaluated as holding. */
+  readonly roles: readonly string[];
 }
 
 /**
- * First match wins, and **an unmatched tool is allowed**.
+ * Asks one server's role list whether a caller may reach it at all.
+ *
+ * `servers.<name>.roles`, when it names any role, admits only callers holding
+ * one of them. A caller with no identity holds no roles, so it is refused too.
+ * An empty list admits everyone, which is what an unset one means. This is the
+ * one place the question is answered: `wrap` and `serve` share it, and so does
+ * every request the proxy forwards to the server, so no method can be
+ * forgotten by a caller who writes it out again.
+ */
+export function evaluateServerAccess(
+  policy: CompiledPolicy,
+  serverName: string,
+  identity: string | undefined,
+): ServerAccess {
+  const roles = policy.rolesFor(identity);
+  const admitted = policy.serverRolesFor(serverName);
+  const refused = admitted.size > 0 && !holdsAny(roles, admitted);
+  return {
+    refused,
+    matchedRule: refused ? `servers.${serverName}.roles` : undefined,
+    roles: [...roles],
+  };
+}
+
+/**
+ * Asks the server's role list first, then the tool rules; the stricter wins.
+ *
+ * The server's list is {@link evaluateServerAccess}.
+ *
+ * Within the tool rules, first match wins, and **an unmatched tool is allowed**.
  *
  * McpGuard is transparent until it is configured, so dropping it in front of an
  * existing server changes nothing until somebody writes rules. That is a
@@ -39,6 +84,17 @@ export function evaluateAccess(
   toolName: string,
   identity: string | undefined,
 ): AccessEvaluation {
+  const server = evaluateServerAccess(policy, serverName, identity);
+  if (server.refused) {
+    return {
+      rule: undefined,
+      matchedRule: server.matchedRule,
+      action: 'deny',
+      roles: server.roles,
+      note: undefined,
+      refusedByServer: true,
+    };
+  }
   const roles = policy.rolesFor(identity);
   const rule = policy.match(serverName, toolName, roles);
   if (rule === undefined) {
@@ -48,6 +104,7 @@ export function evaluateAccess(
       action: 'allow',
       roles: [...roles],
       note: undefined,
+      refusedByServer: false,
     };
   }
   return {
@@ -56,7 +113,13 @@ export function evaluateAccess(
     action: rule.rule.action,
     roles: [...roles],
     note: rule.rule.note,
+    refusedByServer: false,
   };
+}
+
+function holdsAny(held: ReadonlySet<string>, wanted: ReadonlySet<string>): boolean {
+  for (const role of wanted) if (held.has(role)) return true;
+  return false;
 }
 
 /** One call, as the combination detector remembers it. */

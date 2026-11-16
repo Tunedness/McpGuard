@@ -23,6 +23,7 @@ const FIXTURES = join(HERE, '..', 'testing', 'fixtures');
 const HTTP_SERVER = join(FIXTURES, 'http-server.mjs');
 const ECHO = join(FIXTURES, 'echo-server.mjs');
 const CRASH = join(FIXTURES, 'crash-server.mjs');
+const CATALOG = join(FIXTURES, 'catalog-server.mjs');
 
 const MODERN = { versionNegotiation: { mode: { pin: '2026-07-28' } } } as const;
 // Two families of injection, which is what a `block` needs: one family alone can
@@ -365,6 +366,199 @@ describe('a token and the roles it maps to', () => {
     for (const secret of ['alice-secret', 'bob-secret', 'wrong-secret']) {
       expect(everything).not.toContain(secret);
     }
+  });
+});
+
+describe('servers.<name>.roles in front of a real upstream', () => {
+  let gateway: Gateway;
+  const policy = [
+    'version: 1',
+    'mode: enforce',
+    'roles:',
+    '  alice: [reader]',
+    '  bob: [admin]',
+    'servers:',
+    '  fx:',
+    '    roles: [admin]',
+    'auth:',
+    '  tokens:',
+    `    - { identity: alice, token_sha256: "${hashToken('alice-secret')}" }`,
+    `    - { identity: bob, token_sha256: "${hashToken('bob-secret')}" }`,
+    '',
+  ].join('\n');
+
+  beforeAll(async () => {
+    const upstream = await startUpstream('both');
+    gateway = await startGateway('server-roles', { upstream }, policy);
+  }, 60_000);
+  afterAll(async () => {
+    await gateway?.stop();
+  });
+
+  it.each([
+    ['legacy', false],
+    ['modern', true],
+  ] as const)(
+    'refuses the caller the list does not admit and lets the admitted one through, in the %s era',
+    async (_era, modern) => {
+      const alice = await connect(gateway, { modern, token: 'alice-secret' });
+      const bob = await connect(gateway, { modern, token: 'bob-secret' });
+      const denied = await alice.callTool({ name: 'echo', arguments: { text: 'hi' } });
+      expect(textOf(denied)).toContain('content withheld');
+      const allowed = await bob.callTool({ name: 'echo', arguments: { text: 'hi' } });
+      expect(textOf(allowed)).toBe('hi');
+
+      const records = gateway.records().filter((r) => r.kind === 'tool_call');
+      const last = (identity: string) =>
+        records
+          .filter(
+            (r) => (r.callerIdentity as { identity?: string } | undefined)?.identity === identity,
+          )
+          .at(-1);
+      expect(last('alice')).toMatchObject({
+        action: 'deny',
+        findings: ['servers.fx.roles'],
+        callerIdentity: { identity: 'alice', source: 'token', exact: true },
+      });
+      expect(last('bob')).toMatchObject({
+        callerIdentity: { identity: 'bob', source: 'token', exact: true },
+      });
+      expect(last('bob')?.findings).not.toContain('servers.fx.roles');
+    },
+  );
+});
+
+describe('servers.<name>.roles covers every method a caller sends the server', () => {
+  let gateway: Gateway;
+  const policy = [
+    'version: 1',
+    'mode: enforce',
+    'roles:',
+    '  alice: [reader]',
+    '  bob: [admin]',
+    'servers:',
+    '  fx:',
+    '    roles: [admin]',
+    'auth:',
+    '  tokens:',
+    `    - { identity: alice, token_sha256: "${hashToken('alice-secret')}" }`,
+    `    - { identity: bob, token_sha256: "${hashToken('bob-secret')}" }`,
+    '',
+  ].join('\n');
+
+  beforeAll(async () => {
+    gateway = await startGateway('server-roles-methods', { command: ['node', CATALOG] }, policy);
+  }, 60_000);
+  afterAll(async () => {
+    await gateway?.stop();
+  });
+
+  it.each([
+    ['legacy', false],
+    ['modern', true],
+  ] as const)(
+    'answers the refused caller with an error on each method family, and the admitted one with the content, in the %s era',
+    async (_era, modern) => {
+      const alice = await connect(gateway, { modern, token: 'alice-secret' });
+      const bob = await connect(gateway, { modern, token: 'bob-secret' });
+      const refused = /refused · the caller holds none of the roles this server admits/;
+
+      // What the admitted caller gets, one request from each family.
+      expect((await bob.listTools()).tools.map((tool) => tool.name)).toContain('echo');
+      expect(textOf(await bob.callTool({ name: 'echo', arguments: { text: 'hi' } }))).toBe('hi');
+      expect((await bob.listResources()).resources).toHaveLength(1);
+      expect((await bob.listResourceTemplates()).resourceTemplates).toHaveLength(1);
+      expect((await bob.readResource({ uri: 'note://hello' })).contents).toHaveLength(1);
+      expect((await bob.listPrompts()).prompts).toHaveLength(1);
+      expect(
+        (await bob.getPrompt({ name: 'greet', arguments: { name: 'x' } })).messages,
+      ).toHaveLength(1);
+
+      // The refused caller: an error, never an empty list.
+      await expect(alice.listTools()).rejects.toThrow(refused);
+      expect(textOf(await alice.callTool({ name: 'echo', arguments: { text: 'hi' } }))).toContain(
+        'content withheld',
+      );
+      await expect(alice.listResources()).rejects.toThrow(refused);
+      await expect(alice.listResourceTemplates()).rejects.toThrow(refused);
+      await expect(alice.readResource({ uri: 'note://hello' })).rejects.toThrow(refused);
+      await expect(alice.listPrompts()).rejects.toThrow(refused);
+      await expect(alice.getPrompt({ name: 'greet', arguments: { name: 'x' } })).rejects.toThrow(
+        refused,
+      );
+
+      const refusals = gateway
+        .records()
+        .filter(
+          (r) =>
+            (r.callerIdentity as { identity?: string } | undefined)?.identity === 'alice' &&
+            (r.findings as string[]).includes('servers.fx.roles'),
+        );
+      expect(refusals.map((r) => r.kind).sort()).toEqual(
+        expect.arrayContaining(['access_denied', 'resource_read', 'tool_call', 'tool_list']),
+      );
+      for (const record of refusals) {
+        expect(record).toMatchObject({
+          action: 'deny',
+          callerIdentity: { identity: 'alice', source: 'token', exact: true },
+        });
+      }
+    },
+  );
+});
+
+describe('a command-line upstream whose name the policy does not carry', () => {
+  const policyWith = (mode: 'enforce' | 'flag', servers: string): string =>
+    ['version: 1', `mode: ${mode}`, 'servers:', servers, ''].join('\n');
+
+  it('under flag, serves it and says so on stderr', async () => {
+    const gateway = await startGateway(
+      'unmatched-flag',
+      { command: ['node', ECHO] },
+      policyWith('flag', '  other:\n    roles: [admin]'),
+    );
+    try {
+      expect(gateway.stderr()).toContain('"event":"server_unmatched"');
+      expect(gateway.stderr()).toContain('"server":"fx"');
+      const client = await connect(gateway);
+      expect(textOf(await client.callTool({ name: 'echo', arguments: { text: 'hi' } }))).toBe('hi');
+    } finally {
+      await gateway.stop();
+    }
+  }, 60_000);
+
+  it('under enforce, serves it once the policy names it with an empty entry', async () => {
+    const gateway = await startGateway(
+      'unmatched-escape',
+      { command: ['node', ECHO] },
+      policyWith('enforce', '  other:\n    roles: [admin]\n  fx: {}'),
+    );
+    try {
+      expect(gateway.stderr()).not.toContain('server_unmatched');
+      const client = await connect(gateway);
+      expect(textOf(await client.callTool({ name: 'echo', arguments: { text: 'hi' } }))).toBe('hi');
+    } finally {
+      await gateway.stop();
+    }
+  }, 60_000);
+
+  it('under enforce, stops the process with the policy exit code, before it listens', () => {
+    const cwd = join(root, 'unmatched-enforce');
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(
+      join(cwd, 'guardpolicy.yaml'),
+      policyWith('enforce', '  other:\n    roles: [admin]'),
+    );
+    const result = spawnSync(
+      'node',
+      [MAIN, 'serve', '--name', 'fx', '--port', '0', '--', 'node', ECHO],
+      { cwd, encoding: 'utf8', timeout: 20_000 },
+    );
+
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain('"fx"');
+    expect(result.stderr).toContain('servers: { fx: {} }');
+    expect(result.stderr).not.toContain('serve_started');
   });
 });
 

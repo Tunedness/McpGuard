@@ -8,8 +8,8 @@
 export type { CompiledCombination, CompiledPolicy, CompiledRule } from './compile.js';
 export { compilePolicy } from './compile.js';
 export { DURATION_MESSAGE, DURATION_PATTERN, parseDuration } from './duration.js';
-export type { AccessEvaluation, CallMark, CombinationHit } from './evaluate.js';
-export { evaluateAccess, evaluateCombinations } from './evaluate.js';
+export type { AccessEvaluation, CallMark, CombinationHit, ServerAccess } from './evaluate.js';
+export { evaluateAccess, evaluateCombinations, evaluateServerAccess } from './evaluate.js';
 export { compileGlob, globMatches, toolKey } from './glob.js';
 export { defaultPolicy, PolicyValidationError, parsePolicy, pathOf } from './parse.js';
 export type {
