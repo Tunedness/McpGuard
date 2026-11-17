@@ -17,3 +17,4 @@ export function versionBanner(): string {
 export { CliError, EXIT, formatCliError, messageOf } from './errors.js';
 export type { CliContext, Writer } from './io.js';
 export { StringWriter, writeLine, writeLines } from './io.js';
+export { buildJudge, LimitedJudge, OpenAiChatJudge } from './judge/index.js';

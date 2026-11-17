@@ -12,7 +12,7 @@
  * amendment. Integrity and de-duplication still work; brute-forcing the value
  * back does not.
  */
-import type { IdentityResolution, SessionSource } from '../domain/events.js';
+import type { IdentityResolution, JudgeRecord, SessionSource } from '../domain/events.js';
 import { hmacSha256, sha256 } from '../util/hash.js';
 import { stableStringify, toJsonValue } from '../util/json.js';
 
@@ -50,6 +50,14 @@ export interface AuditFields {
    * still verify, because the chain hashes whatever the record holds.
    */
   readonly callerIdentity?: IdentityResolution | undefined;
+  /**
+   * What tier 1 decided before the judge was asked. Present only when the judge
+   * was consulted, so a deployment with the judge off writes the records it always
+   * wrote (ADR-012). `action` is then the final decision.
+   */
+  readonly tier1Action?: string | undefined;
+  /** The judge's recorded answer, for the verdict that set the action. Same condition. */
+  readonly judge?: JudgeRecord | undefined;
 }
 
 /** A complete, chained record. */

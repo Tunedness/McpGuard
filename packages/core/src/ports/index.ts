@@ -66,3 +66,85 @@ export interface Ports {
   readonly audit: AuditSink;
   readonly telemetry: TelemetrySink;
 }
+
+/**
+ * What the tier-2 judge is asked about one content item (ADR-012).
+ *
+ * The text is what the model is shown, so it is the item **after** PII masking
+ * and **before** strip: a masked identity never leaves the proxy, and the span
+ * a strip would have removed is exactly what the judge needs to see.
+ */
+export interface JudgeRequest {
+  /** As the policy masks PII (raw when masking is off), strip not applied. Untrusted: the attacker wrote it. */
+  readonly text: string;
+  readonly kind: 'tool_result' | 'resource';
+  /** `<server>__<tool>` or a URI. Data, never an instruction. */
+  readonly channel: string;
+  /** The tier-1 score, 0–100 integer. */
+  readonly tier1Score: number;
+}
+
+/**
+ * What the judge answered, or why it did not.
+ *
+ * `reason` on `error` is a fixed code and never content: it is copied into logs
+ * a terminal or a SIEM will read.
+ */
+export type JudgeOutcome =
+  | {
+      readonly kind: 'verdict';
+      readonly label: 'injection' | 'benign';
+      /** 0–100 integer. The adapter converts; no float reaches the engine (ADR-009). */
+      readonly confidence: number;
+    }
+  | { readonly kind: 'timeout' }
+  | { readonly kind: 'error'; readonly reason: string }
+  | {
+      readonly kind: 'skipped';
+      readonly reason: 'busy' | 'circuit_open' | 'degraded' | 'out_of_band';
+    };
+
+/** A judge's answer with what it takes to audit it. */
+export interface JudgeResult {
+  readonly outcome: JudgeOutcome;
+  /** The model name the endpoint reported, or the configured one. */
+  readonly model: string;
+  /** The revision or digest the operator pinned in the policy, if any. */
+  readonly modelRevision?: string | undefined;
+  readonly latencyMs: number;
+  /** True when the text was sampled to fit the judge's input budget. */
+  readonly truncated: boolean;
+  /** True when the answer came from the in-process cache and the model was not asked. */
+  readonly cached: boolean;
+}
+
+/**
+ * The tier-2 judge. It can only ever answer; it cannot write to the content, and
+ * what it says can only raise a decision (see `applyJudge`).
+ *
+ * Not part of {@link Ports}: that bag is frozen, and a host that has no judge
+ * must not have to supply one.
+ */
+export interface Judge {
+  /** `null`, `openai_chat`, ... */
+  readonly adapter: string;
+  /** The model the policy names. Empty for the null judge. */
+  readonly model: string;
+  /** The revision the policy pins, when it does. */
+  readonly modelRevision?: string | undefined;
+  /** `timeoutMs` is a number and not an `AbortSignal`: the engine holds no timer concept. */
+  judge(request: JudgeRequest, timeoutMs: number): Promise<JudgeResult>;
+}
+
+/** The judge that is always off. The default everywhere. */
+export const NULL_JUDGE: Judge = {
+  adapter: 'null',
+  model: '',
+  judge: async () => ({
+    outcome: { kind: 'skipped', reason: 'out_of_band' },
+    model: '',
+    latencyMs: 0,
+    truncated: false,
+    cached: false,
+  }),
+};

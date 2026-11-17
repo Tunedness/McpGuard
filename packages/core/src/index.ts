@@ -35,10 +35,15 @@ export type {
   EventType,
   IdentityResolution,
   IdentitySource,
+  JudgeEffect,
+  JudgeItemRecord,
+  JudgeRecord,
   SecurityEvent,
   SecurityEventKind,
   SessionSource,
 } from './domain/events.js';
+export type { AppliedJudge, ApplyJudgeInput, BandInput, JudgedAction } from './judge/index.js';
+export { applyJudge, inJudgeBand } from './judge/index.js';
 export type {
   GuardLock,
   ManifestDiff,
@@ -98,9 +103,14 @@ export type {
   AuditSink,
   Clock,
   IdGenerator,
+  Judge,
+  JudgeOutcome,
+  JudgeRequest,
+  JudgeResult,
   Ports,
   TelemetrySink,
 } from './ports/index.js';
+export { NULL_JUDGE } from './ports/index.js';
 export { escapeUnsafeJson, quote } from './util/display.js';
 export { digestsEqual, hmacSha256, sha256 } from './util/hash.js';
 export type { JsonValue } from './util/json.js';

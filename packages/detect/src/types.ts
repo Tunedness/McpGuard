@@ -102,6 +102,18 @@ export interface ScanVerdict {
    * verdict carries exactly the fields it always did (ADR-012).
    */
   readonly piiDigest?: string | undefined;
+  /**
+   * Whether the score came from two independent families or a critical
+   * standalone finding. Exposed for the tier-2 judge's band and nothing else:
+   * it is read off the score path, never fed back into it (ADR-012).
+   */
+  readonly corroborated: boolean;
+  /**
+   * The item with PII masked as the options mask it (not at all when masking is off)
+   * and strip **not** applied: what the tier-2 judge is shown. Absent for a degraded item, whose masks were never applied and whose
+   * text is therefore not safe to hand to anyone (ADR-012).
+   */
+  readonly maskedText?: string | undefined;
 }
 
 /** How PII masking is configured for one scan. Absent → no masking. */

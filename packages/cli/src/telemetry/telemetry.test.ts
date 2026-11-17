@@ -33,6 +33,24 @@ describe('toLogRecord', () => {
     expect(attrs.find((a) => a.key === 'tunedness.score')?.value).toEqual({ intValue: 80 });
   });
 
+  it('carries the judge model, outcome and effect when the judge was asked, and nothing when not', () => {
+    const attrs = (over: Partial<SecurityEvent>) =>
+      toLogRecord(event(over), 'mcpguard').attributes as { key: string; value: unknown }[];
+    const judged = attrs({
+      judge: { model: 'qwen3:4b', outcome: 'injection', effect: 'raised_to_flag' },
+    });
+    expect(judged.find((a) => a.key === 'tunedness.judge_model')?.value).toEqual({
+      stringValue: 'qwen3:4b',
+    });
+    expect(judged.find((a) => a.key === 'tunedness.judge_outcome')?.value).toEqual({
+      stringValue: 'injection',
+    });
+    expect(judged.find((a) => a.key === 'tunedness.judge_effect')?.value).toEqual({
+      stringValue: 'raised_to_flag',
+    });
+    expect(attrs({}).some((a) => a.key.startsWith('tunedness.judge_'))).toBe(false);
+  });
+
   it('encodes a timestamp in nanoseconds', () => {
     expect(toLogRecord(event(), 'mcpguard').timeUnixNano).toBe('1700000000000000000');
   });

@@ -16,11 +16,13 @@
     "bench:latency": "node dist/latency/run.js",
     "bench:latency:http": "node dist/latency/http.js",
     "corpus:phi": "node dist/phi/generate.js",
-    "bench:phi": "node dist/phi/run.js"
+    "bench:phi": "node dist/phi/run.js",
+    "bench:judge": "node dist/judge/run.js"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
+    "@tunedness/mcpguard": "*",
     "@tunedness/mcpguard-core": "*",
     "@tunedness/mcpguard-detect": "*",
     "@tunedness/mcpguard-proxy": "*",

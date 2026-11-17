@@ -87,3 +87,75 @@ describe('no OpenTelemetry anywhere in the workspace', () => {
     expect(installed).not.toContain('@opentelemetry/api@');
   });
 });
+
+/**
+ * Model runtimes never join the default tree (ADR-012).
+ *
+ * The tier-2 judge talks to a model server over HTTP, with the global `fetch`
+ * and no npm dependency. An in-process runtime would put hundreds of megabytes
+ * and a native addon, whose crash takes the agent's JSON-RPC stream with it,
+ * into every install, so this list is enforced, not hoped for. A companion
+ * package that wants one is a decision for an ADR, not an edit to this list.
+ */
+const MODEL_RUNTIMES = [
+  'onnxruntime-node',
+  'onnxruntime-web',
+  'node-llama-cpp',
+  '@huggingface/transformers',
+  '@xenova/transformers',
+  '@huggingface/tokenizers',
+] as const;
+
+describe('no model runtime in the default install', () => {
+  const manifests = [
+    join(ROOT, 'package.json'),
+    join(ROOT, 'bench', 'package.json'),
+    ...readdirSync(join(ROOT, 'packages')).map((dir) =>
+      join(ROOT, 'packages', dir, 'package.json'),
+    ),
+  ];
+
+  it('checks the manifests it means to', () => {
+    // An empty walk must not pass silently.
+    expect(manifests.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it.each(manifests)('%s names none of them, in any dependency field', (path) => {
+    const manifest = JSON.parse(readFileSync(path, 'utf8')) as Record<
+      string,
+      Record<string, string> | undefined
+    >;
+    const fields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+    for (const field of fields) {
+      for (const name of Object.keys(manifest[field] ?? {})) {
+        expect(MODEL_RUNTIMES as readonly string[]).not.toContain(name);
+      }
+    }
+  });
+
+  it('imports none of them from a source file', () => {
+    for (const file of sourceFiles(SRC)) {
+      const code = stripComments(readFileSync(file, 'utf8'));
+      for (const name of MODEL_RUNTIMES) {
+        expect(code).not.toContain(`'${name}'`);
+        expect(code).not.toContain(`"${name}"`);
+      }
+    }
+  });
+
+  it('is not an installed package either', () => {
+    // `npm ls` again: the lockfile text can name an uninstalled optional peer,
+    // but an installed dependency is a real edge in the tree.
+    let installed = '';
+    try {
+      installed = execFileSync('npm', ['ls', ...MODEL_RUNTIMES, '--all'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch (error) {
+      installed = (error as { stdout?: string }).stdout ?? '';
+    }
+    for (const name of MODEL_RUNTIMES) expect(installed).not.toContain(`${name}@`);
+  });
+});

@@ -14,6 +14,9 @@ import {
   evaluateServerAccess,
   type GuardPolicy,
   type IdentityResolution,
+  type Judge,
+  type JudgeRecord,
+  NULL_JUDGE,
   type SecurityEvent,
   type SecurityEventKind,
   type SessionSource,
@@ -32,6 +35,7 @@ import {
   guardResource,
   guardResult,
 } from '@tunedness/mcpguard-proxy';
+import { applyTier2, type Tier2Outcome } from './judge/gate.js';
 import type { LockStore } from './lock-file.js';
 import {
   createManifestGate,
@@ -118,6 +122,12 @@ export interface RuntimeDeps {
   readonly onEvent: (event: string, detail: Record<string, unknown>) => void;
   /** The OTLP sink, off by default. */
   readonly telemetry: TelemetrySink;
+  /**
+   * The tier-2 judge (ADR-012). Read only when `policy.judge.enabled`; then it is
+   * required, because a policy that asks for a judge and runs without one is a
+   * control that reads as applied and is not. Absent otherwise.
+   */
+  readonly judge?: Judge | undefined;
 }
 
 /** The most calls remembered for one session. The oldest go first. */
@@ -362,6 +372,11 @@ const CONNECTION_LEVEL_METHODS: ReadonlySet<string> = new Set([
 /** Builds the gates for one server. */
 export function buildGates(deps: RuntimeDeps): GuardGates {
   const enforce = deps.policy.mode === 'enforce';
+  const judge = deps.judge ?? NULL_JUDGE;
+  const judging = deps.policy.judge.enabled;
+  if (judging && judge === NULL_JUDGE) {
+    throw new Error('policy.judge.enabled is true but no judge was given to the gates');
+  }
 
   /** The call's context, or the connection's own when the host passed none. */
   const contextOf = (given: CallContext | undefined): CallContext => {
@@ -393,6 +408,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
     action: string,
     score: number | undefined,
     evidence: readonly string[],
+    judged?: JudgeRecord | undefined,
   ): void => {
     deps.telemetry.emit({
       type,
@@ -407,6 +423,9 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       callerIdentity: call.identity,
       sessionSource: call.session.source,
       sessionExact: call.session.exact,
+      ...(judged !== undefined
+        ? { judge: { model: judged.model, outcome: judged.outcome, effect: judged.effect } }
+        : {}),
     });
   };
 
@@ -433,6 +452,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
     piiKinds: readonly string[],
     masked: string,
     raw: string,
+    tier2?: Tier2Outcome | undefined,
   ): void => {
     // The writer owns the hash chain — it holds the running head and the
     // sequence — so the runtime only supplies the fields and the raw content the
@@ -452,9 +472,37 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
         sessionExact: call.session.exact,
         sessionSource: call.session.source,
         callerIdentity: call.identity,
+        // Only when the judge was consulted: with it off, or with nothing in its
+        // band, the record is the one tier 1 alone would have written (ADR-012).
+        ...(tier2?.record !== undefined ? { tier1Action: tier2.tier1, judge: tier2.record } : {}),
       },
       raw,
     );
+  };
+
+  /**
+   * Asks the tier-2 judge about what tier 1 could not settle, and returns the
+   * call's final action. The upstream result is not an argument: whatever the
+   * judge says, the bytes that go back are the ones the scan produced.
+   */
+  const tier2 = async (
+    kind: 'tool_result' | 'resource',
+    scanName: string,
+    guarded: ReturnType<typeof guardResult>,
+  ): Promise<Tier2Outcome | undefined> => {
+    if (!judging) return undefined;
+    const scan = contextFor(scanName).scanOptions;
+    return applyTier2({
+      judge,
+      timeoutMs: deps.policy.judge.timeout,
+      bandFrom: deps.policy.judge.band_from,
+      enforce,
+      kind,
+      channel: `${deps.serverName}__${scanName}`,
+      scan,
+      verdicts: guarded.verdicts,
+      tier1: guarded.action,
+    });
   };
 
   /**
@@ -806,36 +854,49 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       }
       const upstream = await forward();
       const guarded = guardResult(contextFor(toolName), deps.serverName, toolName, upstream);
+      const judged = await tier2('tool_result', toolName, guarded);
+      const action = judged?.action ?? guarded.action;
       const findings = guarded.verdicts.flatMap((v) => v.findings.map((f) => f.ruleId));
       const piiKinds = guarded.verdicts.flatMap((v) => v.piiFindings.map((f) => f.kind));
       const score = Math.max(0, ...guarded.verdicts.map((v) => v.score));
-      if (guarded.action !== 'allow') {
-        notify(call, 'injection_detected', { tool: toolName, action: guarded.action, score });
+      if (action !== 'allow') {
+        notify(call, 'injection_detected', { tool: toolName, action, score });
         emit(
           call,
           'injection_detected',
           'security_event',
           toolName,
-          guarded.action,
+          action,
           score,
           findings,
+          judged?.record,
         );
       }
+      if (judged?.escalated === true && judged.record !== undefined) {
+        notify(call, 'judge_escalated', {
+          tool: toolName,
+          effect: judged.record.effect,
+          action,
+          model: judged.record.model,
+          confidence: judged.record.confidence,
+        });
+      }
       if (piiKinds.length > 0)
-        emit(call, 'pii_masked', 'security_event', toolName, guarded.action, undefined, piiKinds);
+        emit(call, 'pii_masked', 'security_event', toolName, action, undefined, piiKinds);
       const maskedText = guarded.verdicts.map((v) => v.text).join('\n');
       record(
         call,
         'tool_call',
         toolName,
-        guarded.action,
+        action,
         score,
         findings,
         piiKinds,
         maskedText,
         rawTextOf(upstream),
+        judged,
       );
-      if (guarded.action === 'block') {
+      if (action === 'block') {
         return blockedResult('block', findings.length, deps.ruleset.rulesetVersion) as never;
       }
       return guarded.result as never;
@@ -864,24 +925,36 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       }
       const upstream = await forward();
       const guarded = guardResource(contextFor(uri), deps.serverName, uri, upstream);
+      const judged = await tier2('resource', uri, guarded);
+      const action = judged?.action ?? guarded.action;
       const findings = guarded.verdicts.flatMap((v) => v.findings.map((f) => f.ruleId));
       const piiKinds = guarded.verdicts.flatMap((v) => v.piiFindings.map((f) => f.kind));
       const score = Math.max(0, ...guarded.verdicts.map((v) => v.score));
-      if (guarded.action !== 'allow') {
-        notify(call, 'injection_detected', { resource: uri, action: guarded.action, score });
+      if (action !== 'allow') {
+        notify(call, 'injection_detected', { resource: uri, action, score });
+      }
+      if (judged?.escalated === true && judged.record !== undefined) {
+        notify(call, 'judge_escalated', {
+          resource: uri,
+          effect: judged.record.effect,
+          action,
+          model: judged.record.model,
+          confidence: judged.record.confidence,
+        });
       }
       record(
         call,
         'resource_read',
         uri,
-        guarded.action,
+        action,
         score,
         findings,
         piiKinds,
         guarded.verdicts.map((v) => v.text).join('\n'),
         rawTextOf(upstream),
+        judged,
       );
-      if (guarded.action === 'block') {
+      if (action === 'block') {
         return blockedResult('block', findings.length, deps.ruleset.rulesetVersion) as never;
       }
       return guarded.result as never;

@@ -40,6 +40,7 @@ import { AuditWriter } from '../audit-writer.js';
 import { loadPolicy, resolveAgainst } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
+import { buildJudge } from '../judge/index.js';
 import { fileLockStore } from '../lock-file.js';
 import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
@@ -329,6 +330,26 @@ export async function runServe(context: CliContext, argv: readonly string[]): Pr
     ? fileLockStore(resolveAgainst(loaded.dir, policy.lock.path))
     : undefined;
   const correlationKey = readKey(context.env, policy.pii.correlation_key_env);
+  // One judge for every server: one endpoint, one breaker, one in-flight limit.
+  const judgeSession = ulid();
+  const judge = buildJudge(policy, {
+    headers: headersFrom(context.env, policy.judge.headers_env),
+    clock: () => Date.now(),
+    onUnavailable: (info) => {
+      out('judge_error', { session: judgeSession, reason: 'circuit_open', ...info });
+      telemetry.emit({
+        type: 'security_event',
+        kind: 'judge_unavailable',
+        at: Date.now(),
+        sessionId: judgeSession,
+        serverName: '*',
+        toolName: undefined,
+        score: undefined,
+        action: 'none',
+        evidence: ['judge.circuit_open'],
+      });
+    },
+  });
 
   const servers: GatewayServer<CallContext>[] = definitions.map((definition) => ({
     name: definition.name,
@@ -346,6 +367,7 @@ export async function runServe(context: CliContext, argv: readonly string[]): Pr
       history,
       clock: () => Date.now(),
       telemetry,
+      judge,
       onEvent: out,
     }),
   }));

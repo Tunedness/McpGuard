@@ -6,6 +6,7 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "references": [
+    { "path": "../packages/cli" },
     { "path": "../packages/core" },
     { "path": "../packages/detect" },
     { "path": "../packages/proxy" },

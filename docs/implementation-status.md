@@ -70,8 +70,8 @@ Sıradaki iş:
    paketler tarball'dan kurulup koşturuluyor (`npm run pack:smoke`). Kalan:
    `release.yml`'in `publish` adımının elle tetiklenmesi.
 2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
-3. Diğer P1'ler: ~~`serve`'ün çoklu upstream ve havuzu~~ (Faz 19'da bitti), ~~sağlık verisi tanıyıcıları~~ (Faz 21'de bitti), Kademe 2
-   SLM hakem, checkpoint syslog sink'i, trace context yayımı.
+3. Diğer P1'ler: ~~`serve`'ün çoklu upstream ve havuzu~~ (Faz 19'da bitti), ~~sağlık verisi tanıyıcıları~~ (Faz 21'de bitti), ~~Kademe 2
+   SLM hakem~~ (Faz 22'de bitti; gemma4:12b ile ölçüldü, bkz. Faz 22), checkpoint syslog sink'i, trace context yayımı.
 
 Ayrıntı için bkz. [Faz 12 — Devralan kişiye](#faz-12--dokümanlar-ve-v010-bitti).
 
@@ -1431,3 +1431,125 @@ iki era, aynı fixture; `serve` komut satırı upstream'i × `flag`/`enforce`).
   Faz 27'den önce de vardı (araç kuralı tarafı), kapsam dışı bırakıldı.
 - Araç düzeyi `tools` kuralları hâlâ yalnız `tools/call`'ı kapsar; `resources/read` ve `prompts/*`
   için kural yazılamaz, yalnız sunucu listesi bunları kapatır.
+
+---
+
+## Faz 22 — Kademe 2 hakem (bitti, ölçümün bir varsayımı çürüttü)
+
+ADR-012 madde 4–8'in uygulaması. Kullanıcı H-A (yerel HTTP, sıfır bağımlılık), T-B
+(`[band_from, block_at)` artı teyitsiz yüksek skor) ve E-A'yı (hakem yalnız yükseltir) seçti.
+
+```
+packages/core/src/ports/index.ts          Judge, JudgeRequest/Outcome/Result, NULL_JUDGE
+packages/core/src/judge/{apply,band}.ts   applyJudge (saf, E-A tablosu), inJudgeBand
+packages/core/src/domain/events.ts        JudgeRecord, JudgeEffect, judge_unavailable, SecurityEvent.judge
+packages/core/src/audit/record.ts         tier1Action?, judge? (yalnız hakem çağrıldıysa)
+packages/core/src/policy/schema.ts        judge bloğu (+ guardpolicy.v1.schema.json üretildi)
+packages/detect/src/{types,scan}.ts       ScanVerdict.corroborated, maskedText (skor yolu değişmedi)
+packages/cli/src/judge/                   prompt, openai-chat, limiter, gate (applyTier2), index (buildJudge)
+packages/cli/src/runtime.ts               RuntimeDeps.judge; onCall/onRead Kademe 1'den sonra applyTier2
+packages/cli/src/commands/{wrap,serve}.ts hakem kurulumu; serve'te tek hakem, tek devre kesici
+packages/cli/src/{preflight,telemetry/otlp}.ts  headers_env kontrolü; tunedness.judge_* öznitelikleri
+packages/cli/src/discipline.test.ts       model runtime yasak listesi (manifest + kaynak + npm ls)
+bench/src/judge/ + bench/judge/           ölçüm aracı, 64 parafraz, distribution.md/json
+```
+
+**Davranış.** `judge.enabled: false` (varsayılan) iken `buildGates` hakem koduna hiç girmez, kayıt
+biçimi değişmez ve hiçbir bağlantı açılmaz. Açıkken: Kademe 1 `guardResult` ile aynen koşar;
+bant içi her taranmış metin için hakem paralel sorulur (`timeout` ile sınırlı), her cevap
+`applyJudge`'dan geçer ve çağrının eylemi hepsinin en kötüsüdür. Runtime ayrıca `max(Kademe 1,
+sonuç)` aldığı için `applyJudge` bir gün hatalı olsa bile hiçbir karar düşmez. Dönen baytlar
+`guarded.result`'tır; hakemin elinde içeriğe yazacak bir yol yoktur. Gözlem modunda `block` `flag`
+olur, kayıtta `raised_to_block` görünür.
+
+**Bant.** Skor `[band_from, block_at)` içinde ya da `≥ block_at` ve teyitsiz; `band_from` yoksa aracın
+kendi `flag_at`'i. Bozulmuş öğe hakeme gitmez ve kayıtta `skipped: degraded` görünür. Hakemin hiçbir
+şey söyleyemediği (bant dışı) çağrının kaydında `judge` alanı yoktur.
+
+**Hakem girdisi.** `ScanVerdict.maskedText`: politikanın maskelediği (maskeleme kapalıysa ham), strip uygulanmamış metin (strip'i hakeme
+göstermek, enjeksiyon span'ini silmek olurdu). Sabit system mesajı istek başına rastgele sınır
+belirteci adlandırır; metin ve kanal adı `JSON.stringify` ile tek bir JSON nesnesi olarak üç satırlı
+zarfa girer. Çıktı `response_format: json_schema`, `temperature: 0`, `max_tokens: 32`; yanıt katı
+ayrıştırılır (fazladan alan, kod çiti, kesirli ya da aralık dışı sayı = `error: unparseable`).
+Yönlendirme izlenmez (`redirect: 'error'`), yanıt 64 KiB'la sınırlı, kayda yalnız enum ve tam sayılar
+girer; sunucunun bildirdiği model adı `^[\w.:/@+-]{1,128}$`'e uymazsa yapılandırılan ad yazılır.
+
+**Politika.** `judge.{enabled, adapter, endpoint, model, model_revision, timeout, band_from, reasoning_effort,
+max_tokens, max_inflight, max_input_bytes, circuit_failures, circuit_open_for, allow_remote, headers_env}`.
+`enabled` iken `endpoint` ve `model` zorunlu; uç nokta `localhost`/`127.0.0.1`/`[::1]` olmak zorunda,
+yoksa `allow_remote: true` ve `https`; URL'de kimlik bilgisi yasak. `headers_env` adlandırılıp
+boşsa açılış `EXIT.policy` ile durur. Şemaya iki alan eklendi (`circuit_failures`, `circuit_open_for`):
+tasarımın C.5'inde yoktu, V6 "ayarlanabilir" dediği için.
+
+### Ölçülen
+
+- **V5 ÇÜRÜDÜ.** `bench/judge/distribution.md` (`npm run bench:judge`, model gerekmez): 64 elle yazılmış
+  parafraz (8 aile x 4 en + 4 tr), Kademe 1 skoru: 57'si (%89,1) tam 0, 7'si 20-39, hiçbiri 40'a
+  varmıyor. ADR-012'nin "kaçakların çoğu 0'da yığılıyorsa hiçbir bant yakalamaz" koşulu gerçekleşti:
+  varsayılan bant (`band_from = flag_at`) hiçbir kaçağı görmez; `band_from` 20 yalnız 7/64'ü
+  yakalar ve benign korpusun %19,3'ünü hakeme gönderir; yalnız `band_from: 0` 64/64'ü yakalar ve
+  benign 400/400'ü gönderir (= T-C, her araç sonucuna model çağrısı). Çekince: parafrazları tek kişi,
+  ruleset'in aile adlarını okuduktan sonra yazdı; bu bir şekil ölçümüdür, saha oranı değil.
+  **Kullanıcı kararı (2026-11-16): varsayılan bant değişmez; parafraz kaçakları için `band_from: 0`
+  opt-in (ADR-012 eki).**
+- **Makinenin kendi maliyeti.** Model anında cevap verirken (loopback, ardışık, n=500): hakem yolu
+  istek başına p50 1,47 ms, p95 1,65 ms, p99 1,89 ms. Hakem gecikmesi PRD §6'nın p95 < 20 ms
+  bütçesinin dışındadır (PRD: "LLM-hakem hariç"); bu rakam o bütçeye eklenen tek şey değil, modelin
+  süresi bunun üstüne biner.
+- **V6, gerçek modelle (gemma4:12b, Ollama, kullanıcının makinesi).** İlk koşu 372 çağrının hiçbirini
+  cevaplatmadı; neden adaptörün sakladığı sınıfsız `error`'du. Teşhis: Gemma 4 düşünen bir model;
+  `max_tokens: 32` bütçesini `reasoning` alanına harcıyor, `content` boş kalıyor ve `finish_reason:
+  length` dönüyor. Adaptör artık nedeni ayırıyor (`output_truncated`, `empty_content`, `no_content`,
+  `bad_envelope`, `unparseable`, `http_<n>`, `network`, `response_too_large`) ve bench bunları raporluyor.
+  Düzeltme politikada: `judge.reasoning_effort` (`none|minimal|low|medium|high|omit`; varsayılan `none` ve her istekte gönderilir, `omit` alanı istekten çıkarır) ve
+  `judge.max_tokens` (varsayılan 32). Ollama'nın `/v1`'i `reasoning_effort: "none"`'ı uyguluyor; `think:
+  false` uygulamıyor. `none` ile (`--benign-limit 4`, c=1, 68 çağrı): 68/68 cevap, **p50 2882 ms, p95
+  3130 ms, p99 3926 ms**; 3000 ms'den yavaş çağrı %22,1, 5000 ms'den yavaş %0; parafrazların %95,3'ü
+  (61/64; en 32/32, tr 29/32) injection, örneklenen 4 benign öğeden 0'ı (örnek küçük, FP oranı değil).
+  Yani 1500 ms bu model ve bu makinede her çağrıyı zaman aşımına uğratırdı. **Kullanıcı kararı
+  (2026-11-17): varsayılanlar `timeout` 5000 ms, `max_inflight` 1, `reasoning_effort: none`; devre kesici
+  5 hata / 30 sn kaldı.** Ardından `--benign-limit 60` ile 124 çağrı: 123 cevap, 1 zaman aşımı; p50
+  2681 ms, p95 3303 ms, p99 3643 ms, max 3686 ms; 64 parafrazın 61'i injection (%95,3; en 31/32, tr
+  30/32), 2'si benign, 1'i zaman aşımı; 60 benign öğenin 0'ı injection (%0,0; 60 örnek %95 güvenle
+  ~%5'e kadar FP'yi dışlamaz). c=2'de (Ollama `OLLAMA_NUM_PARALLEL=1`) 68 çağrının 67'si zaman
+  aşımı: tek istek işleyen sunucu fazlasını kuyruğa alıyor, zaman aşımına uğrayan istekler de orada
+  işlenmeye devam ediyor; `max_inflight` sunucunun eşzamanlılığını aşmamalı. Bench cevaplanan çağrı
+  yoksa uyarır ve çıkış kodu 2 verir, yarıdan azı cevaplandıysa uyarır.
+  Komut: `npm run bench:judge -- --endpoint http://127.0.0.1:11434/v1/chat/completions --model gemma4:12b
+  --reasoning-effort none --concurrency 1 --timeout 5000`.
+
+### Doğrulama
+
+`judge.test.ts` (bant, E-A, bayt eşitliği, kayıt, yeniden üretim, gerçek adaptör x sahte yerel HTTP,
+devre kesici, önbellek, sınırlayıcı), `injection.test.ts` (zarf, itaatkâr hakem, düşmanca yanıt),
+`wrap-judge.test.ts` (gerçek stdio `wrap` x sahte hakem), `apply.test.ts` (E-A tablosunun tamamı,
+"asla düşürmez" kapsamlı tarama), `policy.test.ts` (loopback/https/kimlik bilgisi),
+`scan-pii.test.ts` (`maskedText`, `corroborated`), `discipline.test.ts` (model runtime yasağı),
+`bench/src/judge/judge.test.ts`. `determinism.test.ts` ve `bench/injection/` değişmedi.
+
+### Devralan kişiye
+
+- Varsayılan bant yalnız Kademe 1'in zaten işaretlediği öğelere bakar; `flag`'e ayarlı bir araçta
+  hakem hiçbir kararı değiştiremez (yalnız kayda düşer). Karar değiştirebildiği iki durum:
+  `band_from < flag_at` iken injection cevabı (`flag`'e yükseltir) ve `action: block` araçta
+  teyitsiz skor (`block`'a yükseltir).
+- `ScanVerdict.corroborated` ve `maskedText` skor yolundan okunur, geri beslenmez.
+- Hakem metni politikanın maskelediği hâldir: `pii.enabled: false` iken (ya da `servers.<ad>.pii.enabled:
+  false`) maskeleme yoktur ve hakem ham metni görür; ADR-012 m.7'nin "ham metin asla gitmez"i loopback
+  hakemde bu durumda tutmaz. **Kullanıcı kararı (2026-11-17):** maskeleme kapalıyken uzak hakem
+  (`allow_remote: true` ya da loopback dışı uç nokta) açılışta `EXIT.policy` (3) ile durur
+  (`preflight.ts`; `wrap`, `serve`, `validate`); loopback hakem maskesiz çalışır ve README bunu yazar.
+  Bench'in `--allow-remote`'ı yalnız maskeli sentetik korpus gönderir.
+- Audit'te çok öğeli çağrı: `judge` kararı belirleyen (yoksa hakemin yükselttiği, yoksa cevapladığı) öğenin
+  kendi `score`/`tier1Action`/`outcome`/`effect`'ini taşır; birden çok öğe hakemden geçtiyse `judge.items`
+  hepsini listeler. Son eylem = çağrı düzeyi `tier1Action` ile her öğede `applyJudge`'ın en kötüsü.
+  `judge_escalated` yalnız hakem çağrının eylemini kötüleştirdiğinde basılır.
+- `reasoning_effort`'u tanımayan sunucu için `omit`; reddeden sunucu her çağrıyı `http_<n>` yapar,
+  yeniden deneme ya da tahmin yoktur.
+- `bench/judge/model-*.md` `.gitignore`'da; yalnız `distribution.*` commit'lenir. Bench'in bayraksız
+  varsayılanları ürününkiyle aynı (şemadan okunur).
+- Hakem `RuntimeDeps.judge`'dır, `Ports`'a girmedi (o arayüz donuk). `judge.enabled` iken `judge`
+  verilmemişse `buildGates` fırlatır.
+- `@tunedness/mcpguard` indeksi `buildJudge`, `LimitedJudge`, `OpenAiChatJudge`'u dışa açıyor
+  (bench kullanıyor). `bench` artık `@tunedness/mcpguard`'a bağlı (private).
+- Changeset `minor` (`tier2-judge.md`).

@@ -592,6 +592,115 @@
         }
       },
       "additionalProperties": false
+    },
+    "judge": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "adapter": {
+          "default": "openai_chat",
+          "type": "string",
+          "enum": [
+            "openai_chat"
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "model_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "timeout": {
+          "default": "5000ms",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d+(ms|s|m|h|d)$"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          ]
+        },
+        "band_from": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "reasoning_effort": {
+          "default": "none",
+          "type": "string",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "omit"
+          ]
+        },
+        "max_tokens": {
+          "default": 32,
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 8192
+        },
+        "max_inflight": {
+          "default": 1,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_input_bytes": {
+          "default": 16384,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "circuit_failures": {
+          "default": 5,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "circuit_open_for": {
+          "default": "30s",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d+(ms|s|m|h|d)$"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          ]
+        },
+        "allow_remote": {
+          "default": false,
+          "type": "boolean"
+        },
+        "headers_env": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": [

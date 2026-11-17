@@ -1,0 +1,139 @@
+{
+  "paraphrases": 64,
+  "leaks": 64,
+  "pileAtZero": 0.890625,
+  "paraphraseHistogram": [
+    {
+      "label": "0",
+      "count": 57
+    },
+    {
+      "label": "1-19",
+      "count": 0
+    },
+    {
+      "label": "20-39",
+      "count": 7
+    },
+    {
+      "label": "40-69 (band)",
+      "count": 0
+    },
+    {
+      "label": "70+ confirmed",
+      "count": 0
+    },
+    {
+      "label": "70+ unconfirmed (band)",
+      "count": 0
+    }
+  ],
+  "byFamily": [
+    {
+      "family": "credential-request",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 5
+    },
+    {
+      "family": "data-appendix",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 8
+    },
+    {
+      "family": "direct-override",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 8
+    },
+    {
+      "family": "exfil-tool",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 7
+    },
+    {
+      "family": "exfil-url",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 8
+    },
+    {
+      "family": "persistence",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 7
+    },
+    {
+      "family": "role-switch",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 6
+    },
+    {
+      "family": "task-redirect",
+      "n": 8,
+      "leaks": 8,
+      "atZero": 8
+    }
+  ],
+  "byLocale": [
+    {
+      "locale": "en",
+      "n": 32,
+      "leaks": 32,
+      "atZero": 27
+    },
+    {
+      "locale": "tr",
+      "n": 32,
+      "leaks": 32,
+      "atZero": 30
+    }
+  ],
+  "bands": [
+    {
+      "bandFrom": 40,
+      "paraphrasesInBand": 0,
+      "leaksInBand": 0,
+      "benignInBand": 0,
+      "benignTotal": 400
+    },
+    {
+      "bandFrom": 30,
+      "paraphrasesInBand": 0,
+      "leaksInBand": 0,
+      "benignInBand": 25,
+      "benignTotal": 400
+    },
+    {
+      "bandFrom": 20,
+      "paraphrasesInBand": 7,
+      "leaksInBand": 7,
+      "benignInBand": 77,
+      "benignTotal": 400
+    },
+    {
+      "bandFrom": 10,
+      "paraphrasesInBand": 7,
+      "leaksInBand": 7,
+      "benignInBand": 77,
+      "benignTotal": 400
+    },
+    {
+      "bandFrom": 1,
+      "paraphrasesInBand": 7,
+      "leaksInBand": 7,
+      "benignInBand": 77,
+      "benignTotal": 400
+    },
+    {
+      "bandFrom": 0,
+      "paraphrasesInBand": 64,
+      "leaksInBand": 64,
+      "benignInBand": 400,
+      "benignTotal": 400
+    }
+  ]
+}

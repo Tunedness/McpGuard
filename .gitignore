@@ -9,6 +9,9 @@ dist/
 coverage/
 .vitest-reports/
 
+# One model on one machine: `bench:judge --endpoint` writes it, it is never committed
+bench/judge/model-*.md
+
 # Runtime state written by the proxy itself
 .mcpguard/
 

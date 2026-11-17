@@ -295,6 +295,129 @@ const TelemetrySchema = z
   })
   .prefault({});
 
+/** Whether a URL's host is this machine, by name or address. */
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+/**
+ * The tier-2 judge (ADR-012): off, and local, unless the operator says otherwise.
+ *
+ * The judge reads masked content, but "masked" is the policy's word and a
+ * security tool does not talk to the network on its own say-so. So the endpoint
+ * must be this machine unless `allow_remote` is set, and a remote one must be
+ * https. The defaults for `timeout`, `max_inflight` and the breaker are one
+ * measurement on one setup (Faz 22): gemma4:12b Q4_K_M through Ollama on the
+ * author's machine, one request at a time, 124 calls: p50 2.7 s, p95 3.3 s, p99
+ * 3.6 s. A
+ * faster server can shorten them. How many calls can run at once is the model
+ * server's own limit, not McpGuard's: Ollama serves one request at a time by
+ * default and queues the rest, so `max_inflight` above that only queues.
+ */
+const JudgeSchema = z
+  .strictObject({
+    /** Off by default (ADR-003): the default install makes no model call and no connection. */
+    enabled: z.boolean().default(false),
+    /** The only adapter for now: an OpenAI-compatible `/v1/chat/completions` endpoint. */
+    adapter: z.enum(['openai_chat']).default('openai_chat'),
+    /** Required when enabled. Ollama, llama-server and vLLM all serve this shape. */
+    endpoint: z.url({ protocol: /^https?$/ }).optional(),
+    /** Required when enabled. McpGuard recommends no model; the operator picks one. */
+    model: z.string().min(1).max(128).optional(),
+    /** A revision or digest the operator pins; written to every record that used the judge. */
+    model_revision: z.string().min(1).max(128).optional(),
+    /**
+     * How long one judge call may take before tier 1's decision stands. 5s covers
+     * the measured p99 (3.9s) of a 12B model on a laptop with room to spare; a
+     * faster server can set it far lower.
+     */
+    timeout: duration('5000ms'),
+    /**
+     * Where the judged band starts. Absent, each tool's own `flag_at`. Lowering it
+     * sends lower-scoring items to the judge, at the price of more model calls.
+     */
+    band_from: score().optional(),
+    /**
+     * Sent as `reasoning_effort`. A model that thinks first (Gemma 4, Qwen 3,
+     * gpt-oss) spends its token budget on the thinking and answers nothing, so for a
+     * judge the default is `none`; Ollama honours it. `omit` leaves the field out of
+     * the request altogether, for a server that does not know it: one that rejects the
+     * field answers every call with an error (recorded as `http_400`, say), and there
+     * is no retry and no guess, so the way out is to set `omit` here.
+     */
+    reasoning_effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'omit']).default('none'),
+    /**
+     * The most tokens the answer may use. The answer is one small JSON object, so the
+     * default is tiny; a model whose thinking cannot be switched off needs far more.
+     */
+    max_tokens: z.number().int().min(16).max(8192).default(32),
+    /**
+     * Judge calls in flight at once. A call over the limit is skipped, never queued.
+     * Keep it at or below what the model server runs at once: Ollama runs one and
+     * queues the rest, so the queued calls only time out.
+     */
+    max_inflight: positiveInt().default(1),
+    /** Bytes of one item shown to the judge; a longer one is sampled head and tail. */
+    max_input_bytes: positiveInt().default(16_384),
+    /** Consecutive timeouts or errors that open the circuit breaker. */
+    circuit_failures: positiveInt().default(5),
+    /** How long an open breaker keeps the judge off before one trial call. */
+    circuit_open_for: duration('30s'),
+    /** Permits an endpoint that is not this machine. Then the endpoint must be https. */
+    allow_remote: z.boolean().default(false),
+    /**
+     * Environment variable holding extra request headers as `Name=value,Name2=value2`
+     * (an API key, for a remote judge). The value never sits in the policy or a record.
+     */
+    headers_env: z.string().min(1).optional(),
+  })
+  .superRefine((judge, ctx) => {
+    if (judge.timeout < 1) {
+      ctx.addIssue({ code: 'custom', path: ['timeout'], message: 'must be at least 1ms' });
+    }
+    if (!judge.enabled) return;
+    if (judge.endpoint === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['endpoint'],
+        message: 'judge.enabled is true, so judge.endpoint is required',
+      });
+    }
+    if (judge.model === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['model'],
+        message: 'judge.enabled is true, so judge.model is required',
+      });
+    }
+    if (judge.endpoint === undefined) return;
+    const url = new URL(judge.endpoint);
+    if (url.username !== '' || url.password !== '') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['endpoint'],
+        message:
+          'the endpoint must not carry credentials; put them in a header named by judge.headers_env',
+      });
+    }
+    if (!isLoopbackHost(url.hostname)) {
+      if (!judge.allow_remote) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['endpoint'],
+          message:
+            'the judge endpoint is not on this machine (localhost, 127.0.0.1 or [::1]); set judge.allow_remote: true to send masked content to it',
+        });
+      } else if (url.protocol !== 'https:') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['endpoint'],
+          message: 'a remote judge endpoint must be https',
+        });
+      }
+    }
+  });
+
 const SessionSchema = z
   .strictObject({
     /**
@@ -444,6 +567,8 @@ export const GuardPolicySchemaV1 = z
     http: HttpSchema,
     auth: AuthSchema,
     telemetry: TelemetrySchema,
+    /** Tier 2: an opt-in local judge for what tier 1 could not settle (ADR-012). */
+    judge: JudgeSchema.prefault({}),
   })
   .meta({
     // No `id` here on purpose: registering one makes `z.toJSONSchema` hoist the

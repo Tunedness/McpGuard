@@ -15,6 +15,7 @@ import { AuditWriter } from '../audit-writer.js';
 import { loadPolicy, resolveAgainst } from '../config.js';
 import { CliError, EXIT, messageOf } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
+import { buildJudge } from '../judge/index.js';
 import { fileLockStore } from '../lock-file.js';
 import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
@@ -116,6 +117,28 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
     );
   }
 
+  // Off unless the policy turns it on; then one judge, one breaker, for this process.
+  const judge = buildJudge(loaded.policy, {
+    headers: headersFrom(context.env, loaded.policy.judge.headers_env),
+    clock: () => Date.now(),
+    onUnavailable: (info) => {
+      context.stderr.write(
+        `[mcpguard] ${JSON.stringify({ event: 'judge_error', session: sessionId, reason: 'circuit_open', ...info })}\n`,
+      );
+      telemetry.emit({
+        type: 'security_event',
+        kind: 'judge_unavailable',
+        at: Date.now(),
+        sessionId,
+        serverName,
+        toolName: undefined,
+        score: undefined,
+        action: 'none',
+        evidence: ['judge.circuit_open'],
+      });
+    },
+  });
+
   // The bridge exists only once the client's first message has named an era, and
   // the identity ladder and the manifest gate read from it, so it is reached
   // through the running wrap. A call that arrives before it is set sees no
@@ -154,6 +177,7 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
     },
     clock: () => Date.now(),
     telemetry,
+    judge,
     onEvent: (event, detail) =>
       context.stderr.write(
         `[mcpguard] ${escapeUnsafeJson(JSON.stringify({ event, session: sessionId, ...detail }))}\n`,

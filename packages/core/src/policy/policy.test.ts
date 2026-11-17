@@ -560,3 +560,103 @@ describe('pii.profile and pii.recognizers', () => {
     );
   });
 });
+
+describe('the tier-2 judge block (ADR-012)', () => {
+  const on = (judge: Record<string, unknown>) =>
+    parsePolicy({ version: 1, judge: { enabled: true, model: 'm', ...judge } });
+  const rejection = (judge: Record<string, unknown>): string => {
+    try {
+      on(judge);
+    } catch (error) {
+      return (error as Error).message;
+    }
+    return '';
+  };
+
+  it('is off, with the measured defaults, in a policy that says nothing', () => {
+    expect(defaultPolicy().judge).toEqual({
+      enabled: false,
+      adapter: 'openai_chat',
+      timeout: 5_000,
+      reasoning_effort: 'none',
+      max_inflight: 1,
+      max_input_bytes: 16_384,
+      max_tokens: 32,
+      circuit_failures: 5,
+      circuit_open_for: 30_000,
+      allow_remote: false,
+    });
+  });
+
+  it('needs an endpoint and a model once enabled', () => {
+    expect(rejection({ endpoint: undefined })).toMatch(/judge\.endpoint is required/);
+    expect(() =>
+      parsePolicy({
+        version: 1,
+        judge: { enabled: true, endpoint: 'http://127.0.0.1:11434/v1/chat/completions' },
+      }),
+    ).toThrow(/judge\.model is required/);
+  });
+
+  it('accepts a loopback endpoint under any of its three names', () => {
+    for (const host of ['127.0.0.1:11434', 'localhost:8080', '[::1]:8080']) {
+      expect(on({ endpoint: `http://${host}/v1/chat/completions` }).judge.enabled).toBe(true);
+    }
+  });
+
+  it('refuses an endpoint that is not this machine, unless allow_remote is set, and then wants https', () => {
+    expect(rejection({ endpoint: 'http://10.0.0.5:8080/v1/chat/completions' })).toMatch(
+      /not on this machine/,
+    );
+    expect(rejection({ endpoint: 'https://judge.example.com/v1/chat/completions' })).toMatch(
+      /allow_remote/,
+    );
+    expect(rejection({ endpoint: 'http://judge.example.com/v1', allow_remote: true })).toMatch(
+      /must be https/,
+    );
+    expect(
+      on({ endpoint: 'https://judge.example.com/v1', allow_remote: true }).judge.allow_remote,
+    ).toBe(true);
+  });
+
+  it('is not fooled by a loopback name that is only a prefix or a userinfo', () => {
+    expect(rejection({ endpoint: 'http://localhost.evil.example/v1' })).toMatch(
+      /not on this machine/,
+    );
+    expect(rejection({ endpoint: 'http://127.0.0.1@evil.example/v1' })).toMatch(
+      /credentials|not on this machine/,
+    );
+  });
+
+  it('refuses credentials in the endpoint', () => {
+    expect(rejection({ endpoint: 'http://user:pw@127.0.0.1:8080/v1' })).toMatch(/credentials/);
+  });
+
+  it('takes a reasoning effort from the OpenAI set and a sane token budget, and refuses the rest', () => {
+    const base = { endpoint: 'http://127.0.0.1:1/v1' };
+    expect(on({ ...base, reasoning_effort: 'none', max_tokens: 512 }).judge).toMatchObject({
+      reasoning_effort: 'none',
+      max_tokens: 512,
+    });
+    expect(on({ ...base, reasoning_effort: 'omit' }).judge.reasoning_effort).toBe('omit');
+    expect(rejection({ ...base, reasoning_effort: 'extreme' })).not.toBe('');
+    expect(rejection({ ...base, max_tokens: 4 })).not.toBe('');
+    expect(rejection({ ...base, max_tokens: 100_000 })).not.toBe('');
+  });
+
+  it('refuses a zero timeout, an unknown adapter and a misspelled key', () => {
+    expect(rejection({ endpoint: 'http://127.0.0.1:1/v1', timeout: 0 })).toMatch(/at least 1ms/);
+    expect(rejection({ endpoint: 'http://127.0.0.1:1/v1', adapter: 'onnx' })).not.toBe('');
+    expect(rejection({ endpoint: 'http://127.0.0.1:1/v1', timeuot: '1s' })).not.toBe('');
+  });
+
+  it('reads durations as a person writes them', () => {
+    const policy = on({
+      endpoint: 'http://127.0.0.1:1/v1',
+      timeout: '2s',
+      circuit_open_for: '1m',
+      band_from: 25,
+    });
+    expect(policy.judge).toMatchObject({ timeout: 2_000, circuit_open_for: 60_000, band_from: 25 });
+  });
+});

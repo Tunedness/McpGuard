@@ -20,7 +20,8 @@ export type SecurityEventKind =
   | 'combination_detected'
   | 'server_unmatched'
   | 'scan_degraded'
-  | 'audit_checkpoint';
+  | 'audit_checkpoint'
+  | 'judge_unavailable';
 
 /**
  * Which rung of the identity ladder answered (ADR-010, ADR-011).
@@ -59,6 +60,53 @@ export interface IdentityResolution {
   readonly note?: string | undefined;
 }
 
+/** What the judge's answer did to the decision (ADR-012). */
+export type JudgeEffect = 'none' | 'raised_to_flag' | 'raised_to_block';
+
+/**
+ * What the judge said about one scanned item, with the inputs `applyJudge` needs
+ * to reproduce what it did to that item: the item's own tier-1 score and action.
+ */
+export interface JudgeItemRecord {
+  /** The item's tier-1 score, 0-100. Not the call's: a call can carry several items. */
+  readonly score: number;
+  /** What tier 1 decided for this item, before any observe-mode downgrade. */
+  readonly tier1Action: 'allow' | 'flag' | 'strip' | 'block';
+  readonly outcome: 'injection' | 'benign' | 'timeout' | 'error' | 'skipped';
+  /** The error or skip code, when `outcome` is one of those. */
+  readonly reason?: string | undefined;
+  readonly confidence?: number | undefined;
+  /** What the judge's answer did to this item, as `applyJudge` computes it. */
+  readonly effect: JudgeEffect;
+}
+
+/**
+ * The judge's answer, as a recorded input (ADR-012 item 8).
+ *
+ * Only enums, integers and the model's name: the judge's own words never reach a
+ * record, because the model's output is attacker-influenced text a terminal or a
+ * SIEM would otherwise be asked to render. The final decision is a pure function
+ * of the tier-1 verdict and this, so an auditor can reproduce it from the record.
+ *
+ * A call can carry several scanned items. The record's own `score`, `tier1Action`,
+ * `outcome` and `effect` describe **one** of them: the item whose judge answer set
+ * the call's action when it did, otherwise one the judge moved, otherwise one it
+ * answered. When more than one item was judged, `items` lists every one of them
+ * (the headline item among them), each with its own score and action. An auditor
+ * replays `items` when it is there and this record itself when it is not, and takes
+ * the worst of those results and the call-level `tier1Action`.
+ */
+export interface JudgeRecord extends JudgeItemRecord {
+  readonly adapter: string;
+  readonly model: string;
+  readonly modelRevision?: string | undefined;
+  readonly latencyMs: number;
+  readonly truncated: boolean;
+  readonly cached: boolean;
+  /** Every judged item, only when there was more than one. */
+  readonly items?: readonly JudgeItemRecord[] | undefined;
+}
+
 /** One emitted event. Attribute encoding is the sink's business, not the engine's. */
 export interface SecurityEvent {
   readonly type: EventType;
@@ -79,4 +127,6 @@ export interface SecurityEvent {
   /** Which rung resolved `sessionId`, and whether that answer is exact (ADR-006). */
   readonly sessionSource?: SessionSource | undefined;
   readonly sessionExact?: boolean | undefined;
+  /** The judge's part in this event, when the judge was asked (ADR-012). */
+  readonly judge?: Pick<JudgeRecord, 'model' | 'outcome' | 'effect'> | undefined;
 }
