@@ -17,7 +17,7 @@ for byte. It performs no I/O and takes the ruleset as an already-parsed object;
 `@tunedness/mcpguard-ruleset/pii/` and are digested apart from the ruleset (`piiDigest`).
 
 What the numbers mean. `bench/phi/results.md` reports every recogniser against a
-synthetic corpus, and each one meets its ADR-012 gate there. That is an **in-sample**
+synthetic corpus, and each gated one (`atc` is not gated) meets its ADR-012 gate there. That is an **in-sample**
 gate: the corpus, the recognisers and the keyword lists were written together. A
 second family, `keyword-collisions-holdout`, uses non-clinical references and dates
 in wording the exclusion lists do not carry. It is reported and not gated, and the

@@ -2,7 +2,9 @@
 
 The pure decision engine behind [McpGuard](../../README.md): policy and access
 control, dangerous-capability combinations, manifest pinning, and the
-hash-chained audit record.
+hash-chained audit record, and `applyJudge`, the pure function that turns a
+recorded tier-2 judge outcome into a final action. The judge can only raise a
+decision, never lower one.
 
 It does **no I/O** — no transport, no MCP SDK, no filesystem. Its only runtime
 dependency is `zod`; the only Node builtin it touches is `node:crypto`, for

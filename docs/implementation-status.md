@@ -8,20 +8,25 @@ o faz sırasında ortaya çıkan çelişkileri tutar.
 
 ## Nerede kaldık
 
-**v0.1.1 yayına hazır, publish bekliyor.** Beş yayınlanan paket (`@tunedness/mcpguard`,
-`@tunedness/mcpguard-core|detect|ruleset|proxy`) changesets akışıyla 0.1.1'e taşındı:
-CHANGELOG'lar yazıldı, `*_VERSION` sabitleri, iç bağımlılık aralıkları ve lockfile
-tutarlı, `packaging.test.ts` ve `pack:smoke` yeşil. Tag atılmadı, publish yapılmadı:
-yayın düğmesi (`release.yml` → `publish`) kullanıcının. 0.1.0 hiç yayımlanmadı; onu
-anlatan baseline changeset'i 0.1.0 girdisi olarak CHANGELOG'da duruyor, 0.1.1
-girdisi Faz 14, 15, 25, 26 düzeltmelerini ve yeniden adlandırmayı anlatıyor.
+**P1 planı bitti; v0.2.0 notları yazıldı, `changeset version` koşulmadı ve publish bekliyor.**
+Paketlerin sürümü hâlâ 0.1.1 (`@tunedness/mcpguard`, `@tunedness/mcpguard-core|detect|ruleset|proxy`).
+`.changeset/` altında beş bekleyen not var: `health-profile`, `server-roles`, `telemetry-syslog`,
+`tier2-judge` (fazların kendi notları) ve `v0-2-0-p1` (Faz 24; `serve`'ü ve sınırlarını anlatan sürüm
+notu, çünkü gateway'in kendi changeset'i yoktu). Hepsi `minor`; `npm run version` onları 0.2.0'a
+çevirir. Sürüm artırımı, tag ve yayın (`release.yml` → `version`, sonra `publish`) kullanıcının; bu
+fazda yapılmadı. 0.1.0 hiç yayımlanmadı; onu anlatan baseline changeset'i 0.1.0 girdisi olarak
+CHANGELOG'da duruyor, 0.1.1 girdisi Faz 14, 15, 25, 26 düzeltmelerini ve yeniden adlandırmayı anlatıyor.
+
+Faz 13, 17 ve 20 yalnız `.ssot` fazlarıydı (ADR-010, ADR-011, ADR-012; kod yok), bu yüzden bu dosyada
+bölümleri yok; kararlar `../.ssot/ADR.md`'de. Faz 24 yalnız doküman: README, paket README'leri, bu dosya
+ve `v0-2-0-p1` changeset'i; koda, teste ve CI'a dokunmadı.
 
 Ürün durumu: Faz 0–10 ve 12 bitti; Faz 11 (HTTP gateway)
 bilinçle P1'e bırakıldı ve çekirdeği Faz 18'de geldi. `mcpguard wrap -- <sunucu>` gerçek MCP protokolüyle
 doğrulanmış tam korumalı proxy: deterministik injection taraması (700 öğelik
 korpusta %100 recall / %0 FP, in-sample), PII maskeleme, erişim denetimi,
 manifest sabitleme, hash zincirli audit, opsiyonel OTLP telemetri. Son kayıtlı
-test sayısı 595 (Faz 9).
+test sayısı 1572 geçti, 3 atlandı (Faz 24'te `npx vitest run --coverage.enabled=false`; 73 dosya).
 
 **P1 doğruluk düzeltmeleri (Faz 14) bitti.** v0.1.0'da anlatılıp çalışmayan
 dört davranış artık çalışıyor ve testle kilitli: audit parmak izi ham metnin
@@ -72,13 +77,25 @@ aşağıdaki Faz 19 bölümünde.
 
 Sıradaki iş:
 
-1. **Yayın düğmesi** — kullanıcının. Adlar kararlı (`@tunedness/mcpguard` +
-   `@tunedness/mcpguard-*`), sürüm 0.1.1'e taşındı (`changeset version` koşuldu) ve
-   paketler tarball'dan kurulup koşturuluyor (`npm run pack:smoke`). Kalan:
-   `release.yml`'in `publish` adımının elle tetiklenmesi.
+1. **Sürüm ve yayın düğmesi** — kullanıcının. Adlar kararlı (`@tunedness/mcpguard` +
+   `@tunedness/mcpguard-*`). Sıra: `npm run version` (beş bekleyen changeset'i 0.2.0'a çevirir,
+   CHANGELOG'ları yazar; `*_VERSION` sabitleri ve iç bağımlılık aralıkları manifest'lerle eşit
+   kalmalı, `packaging.test.ts` bunu zorlar), `npm run pack:smoke`, sonra `release.yml`'in elle
+   tetiklenen `publish` adımı. Hiçbiri bu fazda yapılmadı.
 2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
 3. Diğer P1'ler: ~~`serve`'ün çoklu upstream ve havuzu~~ (Faz 19'da bitti), ~~sağlık verisi tanıyıcıları~~ (Faz 21'de bitti), ~~Kademe 2
    SLM hakem~~ (Faz 22'de bitti; gemma4:12b ile ölçüldü, bkz. Faz 22), ~~checkpoint syslog sink'i, trace context yayımı~~ (Faz 23'te bitti).
+
+Açık kalanlar (hepsi kullanıcı dokümanında "bilinçle olmayan" olarak yazılı): ADR-008'in taranmayan
+yüzeyleri (`prompts/get`, `sampling/createMessage`, elicitation, spec dışı metotlar), OAuth/kimlik
+federasyonu, mTLS, Control Plane, `serve`'de TLS, modern MRTR'nin gateway'den geçmemesi (Faz 18 V2) ve
+`OtlpTelemetrySink`'in yalnız 32 kayıtta flush etmesi (Faz 23). Hakem varsayılanları tek model ve tek
+makinede ölçüldü (Faz 22); PHI rakamları in-sample, holdout'ta 48/48 maskeleme (Faz 21).
+
+Faz 24'te README'deki her rakam yeniden koşturulan komutlarla (`bench:injection`, `bench:latency`,
+`bench:latency:http`, `bench:phi`) eşlendi; gecikme eğrisinin 32 KB'tan sonrası makineye bağlı çıktı ve
+README bunu aralıklarla yazıyor. Eşleme ve elle koşturulan CLI örnekleri
+`../.ssot/plans/2026-11-14-v0-1-to-p1/24-dokumanlar-v0-2-0.rapor.md`'de.
 
 Ayrıntı için bkz. [Faz 12 — Devralan kişiye](#faz-12--dokümanlar-ve-v010-bitti).
 
@@ -1249,7 +1266,7 @@ için kombinasyon ve manifest kayıtları onun dışındadır.
 - `wrap` davranışı değişmedi: `wrap-process.test.ts` dokunulmadan geçer. `runtime.ts`,
   `manifest-gate.ts` ve `stdio-wrap.ts` fazın dosya listesinin dışında, çağrı bağlamını
   genelleştirmek için dokunuldu (davranışsız).
-- Modern MRTR taşınmaz (V2). `README`'deki "`serve` çalışmayı reddeder" satırı eski.
+- Modern MRTR taşınmaz (V2). `README`'deki "`serve` çalışmayı reddeder" satırı eski. (Faz 24'te düzeltildi.)
 
 ---
 
