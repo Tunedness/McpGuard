@@ -69,6 +69,48 @@ describe('validate', () => {
   });
 });
 
+describe('validate: the checkpoint sink', () => {
+  it('passes checkpoint_to: syslog with a target, and prints where it goes', () => {
+    writeFileSync(
+      join(dir, 'guardpolicy.yaml'),
+      'version: 1\naudit:\n  checkpoint_every: 50\n  checkpoint_to: syslog\n  syslog:\n    target: tcp://logs.example.com:601\n',
+    );
+    const { context, stdout } = ctx([]);
+
+    expect(runValidate(context, [])).toBe(EXIT.ok);
+    expect(stdout.text).toContain(
+      'checkpoint: every 50 → syslog tcp://logs.example.com:601 (authpriv)',
+    );
+  });
+
+  it('refuses checkpoint_to: syslog with no target: there is no default to fall back on', () => {
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\naudit:\n  checkpoint_to: syslog\n');
+    const { context } = ctx([]);
+
+    let error: CliError | undefined;
+    try {
+      runValidate(context, []);
+    } catch (thrown) {
+      error = thrown as CliError;
+    }
+
+    expect(error).toBeInstanceOf(CliError);
+    expect(error?.exitCode).toBe(EXIT.policy);
+    // The reason is in what the error carries for the operator, not only its title.
+    expect(JSON.stringify([error?.message, error?.hints])).toContain(
+      'audit.syslog.target is required',
+    );
+  });
+
+  it('prints the stderr default', () => {
+    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\n');
+    const { context, stdout } = ctx([]);
+
+    runValidate(context, []);
+    expect(stdout.text).toContain('checkpoint: every 100 → stderr');
+  });
+});
+
 describe('validate: a policy that asks for what this build cannot deliver', () => {
   const failure = (run: () => unknown): CliError => {
     try {
@@ -79,14 +121,6 @@ describe('validate: a policy that asks for what this build cannot deliver', () =
     }
     throw new Error('expected validate to throw');
   };
-
-  it('refuses checkpoint_to: syslog, which has no sink yet', () => {
-    writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\naudit:\n  checkpoint_to: syslog\n');
-    const error = failure(() => runValidate(ctx([]).context, []));
-
-    expect(error.exitCode).toBe(EXIT.policy);
-    expect(error.message).toMatch(/syslog is not supported yet/);
-  });
 
   it('refuses correlation_tags with no correlation_key_env', () => {
     writeFileSync(join(dir, 'guardpolicy.yaml'), 'version: 1\npii:\n  correlation_tags: true\n');

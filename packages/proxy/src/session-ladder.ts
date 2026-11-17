@@ -29,6 +29,7 @@ import {
   type ClientIdentity,
   clientInfoOf,
   type MetaBag,
+  parseTraceparent,
   SESSION_BAGGAGE_KEY,
   traceparentOf,
 } from './remap.js';
@@ -78,16 +79,9 @@ function usableId(value: string | undefined): string | undefined {
   return value;
 }
 
-/** The trace id of a W3C `traceparent`, when it is well-formed and not all zero. */
+/** The trace id of a W3C `traceparent`, when it is well-formed (see `parseTraceparent`). */
 export function traceIdOf(traceparent: string | undefined): string | undefined {
-  if (traceparent === undefined) return undefined;
-  const fields = traceparent.split('-');
-  const traceId = fields[1];
-  if (fields.length < 4 || traceId === undefined) return undefined;
-  // An all-zero trace id is invalid in the spec, and accepting it would merge
-  // every badly instrumented caller into one session.
-  if (!/^[0-9a-f]{32}$/.test(traceId) || /^0{32}$/.test(traceId)) return undefined;
-  return traceId;
+  return parseTraceparent(traceparent)?.traceId;
 }
 
 /** The bottom rung's key: who, from where. NUL-separated, since NUL cannot occur in either. */

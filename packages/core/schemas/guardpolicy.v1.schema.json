@@ -421,6 +421,35 @@
             "none"
           ]
         },
+        "syslog": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "pattern": "^(?:(?:udp|tcp):\\/\\/(?:[A-Za-z0-9.-]+|\\[[0-9A-Fa-f:.]+\\])(?::[0-9]{1,5})?|unix:\\/\\/\\/[^\\s\\0]+)$"
+            },
+            "facility": {
+              "default": "authpriv",
+              "type": "string",
+              "enum": [
+                "daemon",
+                "auth",
+                "authpriv",
+                "user",
+                "local0",
+                "local1",
+                "local2",
+                "local3",
+                "local4",
+                "local5",
+                "local6",
+                "local7"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
         "key_env": {
           "type": "string",
           "minLength": 1

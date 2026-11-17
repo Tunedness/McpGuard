@@ -139,6 +139,7 @@ async function connect(
     token?: string;
     name?: string;
     capabilities?: ClientCapabilities;
+    headers?: Record<string, string>;
   } = {},
 ): Promise<Client> {
   const client = new Client(
@@ -148,10 +149,12 @@ async function connect(
       ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
     },
   );
+  const headers = {
+    ...(options.token !== undefined ? { authorization: `Bearer ${options.token}` } : {}),
+    ...options.headers,
+  };
   const transport = new StreamableHTTPClientTransport(new URL(`${rigged.base}/mcp/up`), {
-    ...(options.token !== undefined
-      ? { requestInit: { headers: { authorization: `Bearer ${options.token}` } } }
-      : {}),
+    ...(Object.keys(headers).length > 0 ? { requestInit: { headers } } : {}),
   });
   await client.connect(transport);
   transports.set(client, transport);
@@ -391,6 +394,20 @@ describe('the modern leg', () => {
     });
     const meta = JSON.parse(text(result)) as Record<string, string>;
     expect(meta[BAGGAGE_META_KEY]).toBe(`${SESSION_BAGGAGE_KEY}=${TRACE_A}`);
+  });
+
+  it('hands the host the traceparent header of the request, raw, and nothing when there is none', async () => {
+    const header = `00-${TRACE_A}-00f067aa0ba902b7-01`;
+    for (const era of [true, false]) {
+      const r = await rig({ era: era ? 'both' : 'legacy' });
+      const withHeader = await connect(r, { modern: era, headers: { traceparent: header } });
+      await withHeader.callTool({ name: 'echo', arguments: { text: 'x' } });
+      const without = await connect(r, { modern: era });
+      await without.callTool({ name: 'echo', arguments: { text: 'x' } });
+
+      expect(r.calls[0]?.call.traceparent).toBe(header);
+      expect(r.calls[1]?.call.traceparent).toBeUndefined();
+    }
   });
 
   it('adopts a session an outer proxy already named', async () => {

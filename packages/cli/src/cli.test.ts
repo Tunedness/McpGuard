@@ -93,24 +93,44 @@ describe('run: a policy this build cannot honour stops at startup', () => {
     return { ctx: { argv, stdout, stderr, env, cwd: dir }, stderr };
   }
 
-  it('exits non-zero from validate for checkpoint_to: syslog', async () => {
-    const { ctx, stderr } = inDir('version: 1\naudit:\n  checkpoint_to: syslog\n', ['validate']);
+  it.each([
+    'udp://127.0.0.1:514',
+    'tcp://logs.example.com:514',
+    'unix:///run/mcpguard/syslog.sock',
+  ])('accepts checkpoint_to: syslog with the target %s in validate', async (target) => {
+    const { ctx, stderr } = inDir(
+      `version: 1\naudit:\n  checkpoint_to: syslog\n  syslog:\n    target: ${target}\n    facility: local3\n`,
+      ['validate'],
+    );
 
-    await expect(run(ctx)).resolves.toBe(EXIT.policy);
-    expect(stderr.text).toContain('syslog is not supported yet');
+    await expect(run(ctx)).resolves.toBe(EXIT.ok);
+    expect(stderr.text).toBe('');
   });
 
-  it('exits non-zero from wrap for checkpoint_to: syslog, before spawning anything', async () => {
-    const { ctx, stderr } = inDir('version: 1\naudit:\n  checkpoint_to: syslog\n', [
-      'wrap',
-      '--',
-      'node',
-      '-e',
-      '0',
-    ]);
+  it('exits non-zero from validate and wrap for checkpoint_to: syslog with no target, showing the three forms', async () => {
+    const policy = 'version: 1\naudit:\n  checkpoint_to: syslog\n';
+    const validate = inDir(policy, ['validate']);
+    await expect(run(validate.ctx)).resolves.toBe(EXIT.policy);
+    expect(validate.stderr.text).toContain('audit.syslog.target is required');
+    expect(validate.stderr.text).toContain('udp://127.0.0.1:514');
+    expect(validate.stderr.text).toContain('tcp://logs.example.com:514');
+    expect(validate.stderr.text).toContain('unix:///run/mcpguard/syslog.sock');
 
-    await expect(run(ctx)).resolves.toBe(EXIT.policy);
-    expect(stderr.text).toContain('syslog is not supported yet');
+    // Before anything is spawned: `wrap` stops at the policy, not at the child.
+    const wrap = inDir(policy, ['wrap', '--', 'node', '-e', '0']);
+    await expect(run(wrap.ctx)).resolves.toBe(EXIT.policy);
+    expect(wrap.stderr.text).toContain('audit.syslog.target is required');
+  });
+
+  it('exits non-zero from validate and wrap for a syslog target that is none of the three forms', async () => {
+    const policy =
+      'version: 1\naudit:\n  checkpoint_to: syslog\n  syslog:\n    target: http://h:1\n';
+    const validate = inDir(policy, ['validate']);
+    await expect(run(validate.ctx)).resolves.toBe(EXIT.policy);
+    expect(validate.stderr.text).toContain('udp://127.0.0.1:514');
+
+    const wrap = inDir(policy, ['wrap', '--', 'node', '-e', '0']);
+    await expect(run(wrap.ctx)).resolves.toBe(EXIT.policy);
   });
 
   it('exits non-zero from validate and wrap for correlation_tags without a key', async () => {

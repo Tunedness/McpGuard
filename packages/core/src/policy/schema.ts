@@ -241,6 +241,56 @@ const PiiSchema = z
 // audit, lock, telemetry
 // ---------------------------------------------------------------------------
 
+/**
+ * Where syslog checkpoints go, and there is no default: `udp://host[:port]`
+ * (RFC 5426), `tcp://host[:port]` (RFC 6587, one message per line) or
+ * `unix:///absolute/path` (a stream socket; `/dev/log` is a datagram socket Node
+ * cannot write to). The port defaults to 514.
+ *
+ * UDP gives no delivery guarantee: with nothing listening the checkpoint can be
+ * lost, and only a local error (a refused loopback port, a failed send) is
+ * reported. An audit trail that must arrive wants `tcp://` or `unix://`. The CLI
+ * parses the same grammar into an address; this is the check that stops a bad
+ * one at `validate`.
+ */
+const SYSLOG_TARGET =
+  /^(?:(?:udp|tcp):\/\/(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?|unix:\/\/\/[^\s\0]+)$/;
+
+/** What the error says when the target is missing or wrong: the three forms, as examples. */
+const SYSLOG_TARGET_FORMS =
+  'udp://127.0.0.1:514, tcp://logs.example.com:514 or unix:///run/mcpguard/syslog.sock';
+
+/** The RFC 5424 facilities a checkpoint may be filed under. */
+const SYSLOG_FACILITIES = [
+  'daemon',
+  'auth',
+  'authpriv',
+  'user',
+  'local0',
+  'local1',
+  'local2',
+  'local3',
+  'local4',
+  'local5',
+  'local6',
+  'local7',
+] as const;
+
+const SyslogSchema = z
+  .strictObject({
+    /** Required when `audit.checkpoint_to` is `syslog`, and checked there; ignored otherwise. */
+    target: z.string().regex(SYSLOG_TARGET, `must be one of ${SYSLOG_TARGET_FORMS}`).optional(),
+    /** Security records belong under `authpriv`, which most syslogds route to a restricted file. */
+    facility: z.enum(SYSLOG_FACILITIES).default('authpriv'),
+  })
+  .superRefine((syslog, ctx) => {
+    const port = /^(?:udp|tcp):\/\/.*:([0-9]+)$/.exec(syslog.target ?? '')?.[1];
+    if (port !== undefined && (Number(port) < 1 || Number(port) > 65535)) {
+      ctx.addIssue({ code: 'custom', path: ['target'], message: 'the port must be 1-65535' });
+    }
+  })
+  .prefault({});
+
 const AuditSchema = z
   .strictObject({
     enabled: z.boolean().default(true),
@@ -258,6 +308,12 @@ const AuditSchema = z
      */
     checkpoint_to: z.enum(['stderr', 'syslog', 'none']).default('stderr'),
     /**
+     * Where `checkpoint_to: syslog` writes. A failure never stops a call; it is
+     * reported on stderr and as a `security_event`. UDP cannot know whether anyone
+     * received the line, so use `tcp://` or `unix://` when the checkpoint must arrive.
+     */
+    syslog: SyslogSchema,
+    /**
      * Environment variable holding the key that fingerprints raw content.
      *
      * Absent means no raw-content fingerprint is recorded at all. That is a
@@ -265,6 +321,15 @@ const AuditSchema = z
      * low-entropy content, which is a recovery path wearing a hash's clothes.
      */
     key_env: z.string().min(1).optional(),
+  })
+  .superRefine((audit, ctx) => {
+    if (audit.checkpoint_to === 'syslog' && audit.syslog.target === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['syslog', 'target'],
+        message: `audit.checkpoint_to is syslog, so audit.syslog.target is required: ${SYSLOG_TARGET_FORMS}`,
+      });
+    }
   })
   .prefault({});
 

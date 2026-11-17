@@ -5,7 +5,7 @@
  * starting a proxy. A misspelled key is a security control that silently did not
  * apply, so this is the command that catches it before an incident does.
  */
-import { compilePolicy } from '@tunedness/mcpguard-core';
+import { compilePolicy, type GuardPolicy } from '@tunedness/mcpguard-core';
 import { loadPolicy } from '../config.js';
 import { EXIT } from '../errors.js';
 import { type CliContext, writeLines } from '../io.js';
@@ -18,6 +18,12 @@ export function validateHelp(): string[] {
     '',
     'Validates the policy and prints its resolved form.',
   ];
+}
+
+/** Where the audit checkpoint goes, as `validate` prints it. */
+function checkpointLabel(policy: GuardPolicy): string {
+  const { checkpoint_to: to, syslog } = policy.audit;
+  return to === 'syslog' ? `syslog ${syslog.target ?? '(no target)'} (${syslog.facility})` : to;
 }
 
 /** Runs the validate command. */
@@ -43,6 +49,9 @@ export function runValidate(context: CliContext, argv: readonly string[]): numbe
     `scan: action=${p.scan.default.action} flag_at=${p.scan.default.flag_at} block_at=${p.scan.default.block_at}`,
     `pii: ${p.pii.enabled ? `on (${p.pii.profile === 'health' ? 'profile=health, ' : ''}strict_checksum=${p.pii.strict_checksum})` : 'off'}`,
     `audit: ${p.audit.enabled ? `on → ${p.audit.path}` : 'off'}`,
+    ...(p.audit.enabled
+      ? [`checkpoint: every ${p.audit.checkpoint_every} → ${checkpointLabel(p)}`]
+      : []),
     `lock: ${p.lock.enabled ? `on → ${p.lock.path}` : 'off'}`,
     `tools: ${p.tools.length} rule(s)`,
     `combinations: ${p.combinations.length} rule(s)`,

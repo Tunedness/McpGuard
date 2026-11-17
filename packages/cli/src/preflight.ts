@@ -2,9 +2,9 @@
  * The checks a policy must pass before it is allowed to run.
  *
  * A policy can parse and compile and still ask for something this build cannot
- * honour: a correlation tag with no key to compute it, a checkpoint sink that
- * does not exist yet. Dropping either silently would be a security control that
- * reads as applied and is not, so `validate` and `wrap` both refuse up front.
+ * honour: a correlation tag with no key to compute it, a remote judge shown raw
+ * text. Dropping either silently would be a security control that reads as
+ * applied and is not, so `validate` and `wrap` both refuse up front.
  */
 import type { GuardPolicy } from '@tunedness/mcpguard-core';
 import { CliError, EXIT } from './errors.js';
@@ -79,13 +79,6 @@ export function assertPolicyRunnable(policy: GuardPolicy, env: Env): void {
         },
       );
     }
-  }
-
-  if (policy.audit.checkpoint_to === 'syslog') {
-    throw new CliError('audit.checkpoint_to: syslog is not supported yet (P1, Faz 23)', {
-      exitCode: EXIT.policy,
-      hints: ['use checkpoint_to: stderr or none until the syslog sink lands'],
-    });
   }
 }
 

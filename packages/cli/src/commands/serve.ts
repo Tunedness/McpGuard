@@ -33,6 +33,7 @@ import {
   type GatewayServer,
   isSupportedSessionKey,
   PROXY_VERSION,
+  parseTraceparent,
   startHttpEndpoint,
   type UpstreamTarget,
 } from '@tunedness/mcpguard-proxy';
@@ -46,7 +47,12 @@ import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
 import { buildGates, type CallContext, CombinationHistory, resolveIdentity } from '../runtime.js';
 import { checkServerName, reportUnmatchedServer } from '../server-name.js';
-import { NULL_TELEMETRY, OtlpTelemetrySink } from '../telemetry/sink.js';
+import {
+  checkpointFailureReporter,
+  checkpointSinkFor,
+  NULL_TELEMETRY,
+  OtlpTelemetrySink,
+} from '../telemetry/sink.js';
 import { ulid } from '../ulid.js';
 import { parseServeArgs } from './serve-args.js';
 import { headersFrom, otlpPoster } from './wrap.js';
@@ -293,16 +299,6 @@ export async function runServe(context: CliContext, argv: readonly string[]): Pr
     context.stderr.write(`[mcpguard] ${escapeUnsafeJson(JSON.stringify({ event, ...detail }))}\n`);
   };
 
-  const audit = policy.audit.enabled
-    ? new AuditWriter({
-        path: resolveAgainst(loaded.dir, policy.audit.path),
-        auditKey:
-          policy.audit.key_env !== undefined ? context.env[policy.audit.key_env] : undefined,
-        checkpointEvery: policy.audit.checkpoint_every,
-        checkpoint: policy.audit.checkpoint_to === 'stderr' ? context.stderr : undefined,
-      })
-    : undefined;
-
   const telemetry =
     policy.telemetry.enabled && policy.telemetry.endpoint !== undefined
       ? new OtlpTelemetrySink({
@@ -317,6 +313,27 @@ export async function runServe(context: CliContext, argv: readonly string[]): Pr
   if (unmatched !== undefined) {
     reportUnmatchedServer(unmatched, out, telemetry, Date.now, ulid());
   }
+
+  const audit = policy.audit.enabled
+    ? new AuditWriter({
+        path: resolveAgainst(loaded.dir, policy.audit.path),
+        auditKey:
+          policy.audit.key_env !== undefined ? context.env[policy.audit.key_env] : undefined,
+        checkpointEvery: policy.audit.checkpoint_every,
+        // A checkpoint that goes missing is reported on stderr and as a security event.
+        checkpoint: checkpointSinkFor(
+          policy.audit,
+          context.stderr,
+          checkpointFailureReporter({
+            out,
+            telemetry,
+            clock: Date.now,
+            sessionId: ulid(),
+            serverName: '*',
+          }),
+        ),
+      })
+    : undefined;
 
   // One history for every server: a combination rule is about what a session has
   // done, and a session may have done it on two servers. Marks carry the server.
@@ -387,6 +404,7 @@ export async function runServe(context: CliContext, argv: readonly string[]): Pr
         exact: input.session.exact,
       },
       identity: identityOf(input),
+      trace: parseTraceparent(input.traceparent),
       listTools: input.listTools,
       connection: input.connection,
       upstream: input.upstream,

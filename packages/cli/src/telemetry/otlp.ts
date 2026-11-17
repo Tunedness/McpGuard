@@ -56,6 +56,10 @@ export function toLogRecord(event: SecurityEvent, service: string): Record<strin
     eventName: `tunedness.${event.type}`,
     body: str(event.kind).value,
     attributes,
+    // OTLP/JSON writes trace and span ids as hex, which is how `traceparent` has them.
+    ...(event.trace !== undefined
+      ? { traceId: event.trace.traceId, spanId: event.trace.spanId }
+      : {}),
   };
 }
 

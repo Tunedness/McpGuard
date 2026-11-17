@@ -83,6 +83,65 @@ describe('parsePolicy', () => {
     );
   });
 
+  it('has no syslog target by default, and gives the facility authpriv', () => {
+    const { syslog } = parsePolicy({ version: 1 }).audit;
+
+    expect(syslog).toEqual({ facility: 'authpriv' });
+  });
+
+  it('requires a target for checkpoint_to: syslog, and shows the three forms', () => {
+    const attempt = () => parsePolicy({ version: 1, audit: { checkpoint_to: 'syslog' } });
+
+    expect(attempt).toThrow(PolicyValidationError);
+    expect(attempt).toThrow(/audit\.syslog\.target is required/);
+    expect(attempt).toThrow(
+      /udp:\/\/127\.0\.0\.1:514.*tcp:\/\/logs\.example\.com:514.*unix:\/\/\/run/,
+    );
+  });
+
+  it('does not ask for a target when the checkpoint goes elsewhere', () => {
+    expect(() => parsePolicy({ version: 1, audit: { checkpoint_to: 'none' } })).not.toThrow();
+    expect(() => parsePolicy({ version: 1 })).not.toThrow();
+  });
+
+  it.each([
+    'udp://logs.example.com:6514',
+    'udp://[::1]',
+    'tcp://127.0.0.1:601',
+    'unix:///run/mcpguard.sock',
+  ])('accepts the syslog target %s', (target) => {
+    const audit = parsePolicy({
+      version: 1,
+      audit: { checkpoint_to: 'syslog', syslog: { target } },
+    }).audit;
+
+    expect(audit.syslog.target).toBe(target);
+  });
+
+  it.each([
+    'http://h:514',
+    'udp://',
+    'udp://h:0',
+    'tcp://h:65536',
+    'unix:/run/x.sock',
+    'unix://rel',
+    '/dev/log',
+    '',
+  ])('rejects the syslog target %j', (target) => {
+    expect(() =>
+      parsePolicy({ version: 1, audit: { checkpoint_to: 'syslog', syslog: { target } } }),
+    ).toThrow(PolicyValidationError);
+  });
+
+  it('rejects a syslog facility and a syslog key it does not know', () => {
+    expect(() => parsePolicy({ version: 1, audit: { syslog: { facility: 'kern' } } })).toThrow(
+      PolicyValidationError,
+    );
+    expect(() => parsePolicy({ version: 1, audit: { syslog: { host: 'x' } } })).toThrow(
+      PolicyValidationError,
+    );
+  });
+
   it('rejects a misspelled key rather than ignoring it', () => {
     // A security control that silently did not apply is the worst outcome
     // available, so every object in the schema is strict.

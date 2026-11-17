@@ -79,6 +79,42 @@ export function traceparentOf(meta: MetaBag | undefined): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
+/** The trace and span a `traceparent` names, as lower-case hex. */
+export interface ParsedTraceparent {
+  readonly traceId: string;
+  readonly spanId: string;
+}
+
+const TRACE_ID = /^[0-9a-f]{32}$/;
+const SPAN_ID = /^[0-9a-f]{16}$/;
+const HEX2 = /^[0-9a-f]{2}$/;
+/** Version 00 is 55 characters; a later version may append fields, but not without bound. */
+const MAX_TRACEPARENT_LENGTH = 512;
+
+/**
+ * Reads a W3C `traceparent` (`version-traceid-parentid-flags`, lower-case hex).
+ *
+ * The one reader of that header in the workspace: the session ladder's first
+ * rung and the telemetry's trace ids both come from it, so a session that was
+ * named by a trace id is always a record that carries that trace. A value that
+ * is not well-formed gives `undefined`, never an error: an untrusted caller's
+ * header is a reason to leave a correlation off, not to fail a request. All-zero
+ * ids are invalid in the spec (and would merge every badly instrumented caller
+ * into one session), version `ff` is forbidden, version `00` has exactly four
+ * fields, and a later version is read by its first four, as the spec asks.
+ */
+export function parseTraceparent(value: unknown): ParsedTraceparent | undefined {
+  if (typeof value !== 'string' || value.length > MAX_TRACEPARENT_LENGTH) return undefined;
+  const parts = value.split('-');
+  const [version = '', traceId = '', spanId = '', flags = ''] = parts;
+  if (parts.length < 4 || !HEX2.test(version) || version === 'ff') return undefined;
+  if (version === '00' && parts.length !== 4) return undefined;
+  if (!HEX2.test(flags)) return undefined;
+  if (!TRACE_ID.test(traceId) || /^0+$/.test(traceId)) return undefined;
+  if (!SPAN_ID.test(spanId) || /^0+$/.test(spanId)) return undefined;
+  return { traceId, spanId };
+}
+
 /** The self-reported identity of the software that made a request. */
 export interface ClientIdentity {
   readonly name: string;

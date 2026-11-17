@@ -53,6 +53,13 @@ bilinmeyen tanıyıcı id'si artık politika yüklenirken hata. Anahtar sözcük
 `@tunedness/mcpguard-ruleset/pii/` altında veri ve ayrı `piiDigest`'te; `bench/phi/`
 korpusu ADR-012 kapısını CI'da zorluyor. Ayrıntı aşağıdaki Faz 21 bölümünde.
 
+**Telemetri (Faz 23) tamam.** İstekteki W3C `traceparent` (`_meta.traceparent`, HTTP'de başlık)
+OTLP log kaydının `traceId`/`spanId` alanlarına yazılıyor, böylece McpGuard ve AgentFuse olayları tek trace'te
+birleşiyor; geçersiz değer yok sayılıyor. `checkpoint_to: syslog` artık açılışta reddedilmiyor: RFC 5424
+satırı UDP, TCP ya da unix stream soketine gidiyor. Hedef zorunlu (örtük varsayılan yok). Teslim garantisi
+taşımaya göre değişiyor: UDP garanti vermez, denetim için `tcp://` ya da `unix://` kullanılır. Hiçbir hata
+sessiz geçmez: stderr'e ve `security_event`'e yazılır. Ayrıntı aşağıdaki Faz 23 bölümünde.
+
 **Korumalı HTTP gateway çekirdeği (Faz 18) bitti, çoklu upstream (Faz 19) geldi.**
 `mcpguard serve` her upstream için `wrap`'in üç kapısını (`tools/call`, `resources/read`, `tools/list`) aynı
 `runtime.ts` koduyla HTTP üzerinden sunuyor; iki era'yı da (legacy session'lı,
@@ -71,7 +78,7 @@ Sıradaki iş:
    `release.yml`'in `publish` adımının elle tetiklenmesi.
 2. ~~P1 manifest bağlama~~ — Faz 15'te bitti.
 3. Diğer P1'ler: ~~`serve`'ün çoklu upstream ve havuzu~~ (Faz 19'da bitti), ~~sağlık verisi tanıyıcıları~~ (Faz 21'de bitti), ~~Kademe 2
-   SLM hakem~~ (Faz 22'de bitti; gemma4:12b ile ölçüldü, bkz. Faz 22), checkpoint syslog sink'i, trace context yayımı.
+   SLM hakem~~ (Faz 22'de bitti; gemma4:12b ile ölçüldü, bkz. Faz 22), ~~checkpoint syslog sink'i, trace context yayımı~~ (Faz 23'te bitti).
 
 Ayrıntı için bkz. [Faz 12 — Devralan kişiye](#faz-12--dokümanlar-ve-v010-bitti).
 
@@ -1553,3 +1560,70 @@ devre kesici, önbellek, sınırlayıcı), `injection.test.ts` (zarf, itaatkâr 
 - `@tunedness/mcpguard` indeksi `buildJudge`, `LimitedJudge`, `OpenAiChatJudge`'u dışa açıyor
   (bench kullanıyor). `bench` artık `@tunedness/mcpguard`'a bağlı (private).
 - Changeset `minor` (`tier2-judge.md`).
+
+---
+
+## Faz 23 — Telemetri: `traceparent` ve syslog checkpoint sink'i (bitti)
+
+İki küçük P1. `@opentelemetry/*` ve harici syslog kütüphanesi ağaca girmedi (ADR-007,
+`discipline.test.ts`); ikisi de elle yazıldı.
+
+```
+packages/core/src/domain/events.ts        TraceContext, SecurityEvent.trace? (eklemeli, isteğe bağlı)
+packages/core/src/policy/schema.ts        audit.syslog { target, facility } (+ guardpolicy.v1.schema.json üretildi)
+packages/cli/src/telemetry/otlp.ts        parseTraceparent; log kaydına traceId/spanId
+packages/cli/src/telemetry/syslog.ts      RFC 5424 biçimi, parseSyslogTarget, SyslogCheckpointSink
+packages/cli/src/telemetry/sink.ts        checkpointSinkFor (stderr | syslog | none)
+packages/cli/src/runtime.ts               CallContext.trace; istek _meta'sından okunur, olaya yazılır
+packages/proxy/src/http-gateway.ts        GatewayCallInput.traceparent (HTTP başlığı, ham)
+packages/cli/src/commands/{wrap,serve,validate}.ts, preflight.ts   sink seçimi; syslog reddi kalktı
+```
+
+**`traceparent`.** Tek ayrıştırıcı var: `parseTraceparent` (`packages/proxy/src/remap.ts`). ADR-006
+merdiveninin ilk basamağı (`traceIdOf`) ile telemetri aynı fonksiyonu kullanıyor; böylece bir trace id'yle
+adlandırılmış oturum, o trace'i taşımayan bir kayıtla karşılaşmıyor. Biçim W3C'ye göre: küçük harf hex,
+sürüm `00` tam dört alan, `ff` yasak, sıfır `trace-id`/`parent-id` geçersiz, sonraki sürümler ilk dört alanından
+okunur, 512 karakter üst sınır. `_meta.traceparent` başlıktan önce gelir (merdivenle aynı sıra). Geçersiz değer
+yok sayılır, olay yine yayılır, hiçbir yerde fırlatılmaz. `spanId` çağıranın span'idir (`parent-id`): kayıt onun
+altında durur. Trace context yalnız korelasyondur; hiçbir kararı değiştirmez ve audit kaydına girmez (zincir
+biçimi değişmedi). **Davranış değişikliği:** merdivenin trace basamağı eskiden yalnız trace-id'ye bakıyordu;
+sıfır span-id'li, `ff` sürümlü ya da bozuk flag'li bir `traceparent` artık oturumu adlandırmıyor, bir alt
+basamağa düşüyor.
+
+**Syslog.** Politika: `audit.checkpoint_to: syslog` + **zorunlu** `audit.syslog.target` (örtük varsayılan yok;
+yoksa `validate` ve açılış `EXIT.policy` ile durur ve üç biçimi örnekler) ve isteğe bağlı `audit.syslog.facility`
+(varsayılan `authpriv`). Hedef biçimleri: `udp://127.0.0.1:514`, `tcp://logs.example.com:514`,
+`unix:///run/mcpguard/syslog.sock` (port verilmezse 514). Satır: `<PRI>1 <UTC zaman> <host> mcpguard - audit_checkpoint - <JSON>`;
+MSG stderr'e giden JSON'un kendisi (öneksiz), tek satıra indirilir, karakter bölmeden 2048 bayta kesilir.
+TCP ve unix'te mesajlar satırla ayrılır (RFC 6587 non-transparent).
+
+**Teslim ve hata davranışı (taşımaya göre, kodla birebir).** Bir hata çağrıyı durdurmaz ya da geciktirmez;
+ama hiçbir yolda sessiz geçmez: her biri `checkpoint_error` olarak stderr'e (`code`, `message`) ve
+`security_event`'e (`kind: audit_checkpoint`, `action: checkpoint_failed`, `evidence: ["syslog.<kod>"]`) yazılır;
+telemetri kapalıysa yalnız stderr.
+- **UDP: teslim garantisi yok.** Dinleyici yoksa checkpoint kaybolabilir ve uzak bir hedefte bunu bilmenin yolu
+  yoktur. Soket *bağlıdır* (`connect`), bu yüzden yerel yığının öğrendiği şey (loopback'te ve çoğu LAN'da ICMP
+  port-unreachable → `ECONNREFUSED`, adres çözümleme hatası, `send` hatası) hata olarak döner ve raporlanır.
+  Denetim için `tcp://` ya da `unix://` kullanın.
+- **TCP ve unix:** bağlantı reddi, bağlantı zaman aşımı (5 sn), yazma hatası ya da dolmuş kuyruk (64 KiB)
+  raporlanır; bağlantı kurulamadığında bekleyen her checkpoint için ayrı bir rapor çıkar. Sonraki checkpoint
+  yeniden bağlanır; başarısız olan yeniden denenmez.
+- Sink kapatıldıktan sonra gelen ya da biçimlenemeyen checkpoint da raporlanır. Sink süreci canlı tutmaz.
+- **Hiçbir sink hatası süreci çökertmez.** Soket callback'leri ve olay işleyicileri istisna fırlatmaz; her hata
+  gerçek nedeniyle (`ENOTFOUND`, `ECONNREFUSED`, `EPIPE`, `ENOENT`, …) raporlanır. Hata sonrası ölü soket atılır;
+  **yeniden deneme bir sonraki checkpoint'te** yeniden çözümleme ve bağlanmadır (zamanlayıcı ya da döngü yok).
+  Bağlantı kurulurken (UDP) en çok 16 checkpoint bekler, fazlası düşürülür ve raporlanır; UDP bağlantı kurma
+  süresi de 5 sn ile sınırlı. Kaybolan her checkpoint en az bir kez raporlanır.
+
+**Devralan kişiye.**
+- **`unix://` hedefi stream soketidir, `/dev/log` değil.** Node datagram unix soketi açamaz;
+  Linux ve macOS'ta `/dev/log` datagram'dır. Yerel syslogd'ye ulaşmanın yolu loopback TCP ya da UDP
+  dinleyicisidir (`imtcp`/`imudp`); `unix://` yalnız stream dinleyen bir alıcı (ör. syslog-ng `unix-stream`) içindir.
+- `checkpointFailureReporter` (`telemetry/sink.ts`) iki çıktıyı birden verir; `wrap` ve `serve` aynısını bağlar
+  (`serve`'de olay `serverName: '*'` ve kendi oturum ULID'i altında durur).
+- PROCID `-` (nil): süreç bilgisine yalnız `main.ts` dokunabilir (`discipline.test.ts`).
+- Dosya listesinin dışında dokunulanlar: `packages/core/src/domain/events.ts` ve `index.ts` (olaya isteğe
+  bağlı `trace`), `packages/proxy/src/http-gateway.ts` (başlığı bağlamaya taşımak için). İkisi de eklemeli.
+- Mevcut açık (bu fazın değil): `OtlpTelemetrySink` yalnız 32 kayıt dolunca flush ediyor; zamanlayıcı ya da
+  kapanışta flush yok. Düşük hacimde olaylar collector'a uzun süre ulaşmayabilir.
+- Unix soket testi, soket bağlamaya izin vermeyen bir ortamda (kilitli sandbox, `EPERM`) açıkça atlanır.

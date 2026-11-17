@@ -60,6 +60,8 @@ export {
   clientInfoOf,
   injectSession,
   type MetaBag,
+  type ParsedTraceparent,
+  parseTraceparent,
   SESSION_BAGGAGE_KEY,
   traceparentOf,
 } from './remap.js';

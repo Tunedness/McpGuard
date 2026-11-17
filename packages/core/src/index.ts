@@ -41,6 +41,7 @@ export type {
   SecurityEvent,
   SecurityEventKind,
   SessionSource,
+  TraceContext,
 } from './domain/events.js';
 export type { AppliedJudge, ApplyJudgeInput, BandInput, JudgedAction } from './judge/index.js';
 export { applyJudge, inJudgeBand } from './judge/index.js';

@@ -94,6 +94,11 @@ export interface GatewayCallInput {
   readonly tokenIdentity: string | undefined;
   /** What the caller says it is: from `initialize` (legacy) or the envelope (modern). */
   readonly clientInfo: ClientIdentity | undefined;
+  /**
+   * The raw `traceparent` header of the HTTP request, unparsed and unvalidated:
+   * the host decides what it is worth. A `_meta.traceparent` is in the request.
+   */
+  readonly traceparent: string | undefined;
   /** Asks the upstream this call goes to for its whole tool list. */
   readonly listTools: () => Promise<readonly unknown[]>;
   /**
@@ -190,6 +195,7 @@ interface RequestFacts {
   readonly tokenIdentity: string | undefined;
   readonly mcpSessionId: string | undefined;
   readonly clientInfo: ClientIdentity | undefined;
+  readonly traceparent: string | undefined;
   readonly timing: { readonly start: number; sentAt?: number; receivedAt?: number };
 }
 
@@ -392,6 +398,7 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
           session,
           tokenIdentity: facts.tokenIdentity,
           clientInfo,
+          traceparent: facts.traceparent,
           listTools: () => listAllTools(upstream),
           connection: connectionOf(upstream),
           upstream: serverName,
@@ -759,6 +766,7 @@ export function createHttpGateway<C>(options: HttpGatewayOptions<C>): HttpGatewa
       tokenIdentity,
       mcpSessionId: undefined,
       clientInfo: undefined,
+      traceparent: request.headers.get('traceparent') ?? undefined,
       timing: { start: started },
     };
     const response =

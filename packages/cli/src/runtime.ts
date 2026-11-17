@@ -22,6 +22,7 @@ import {
   type SessionSource,
   type TelemetrySink,
   type ToolDefinition,
+  type TraceContext,
   toolKey,
 } from '@tunedness/mcpguard-core';
 import type { CompiledRuleset, ScanOptions } from '@tunedness/mcpguard-detect';
@@ -34,6 +35,7 @@ import {
   guardCall,
   guardResource,
   guardResult,
+  parseTraceparent,
 } from '@tunedness/mcpguard-proxy';
 import { applyTier2, type Tier2Outcome } from './judge/gate.js';
 import type { LockStore } from './lock-file.js';
@@ -43,6 +45,15 @@ import {
   type ManifestEvent,
   type ToolScan,
 } from './manifest-gate.js';
+
+/** The `_meta` bag a request carries, when it carries one. */
+function metaOf(request: unknown): Record<string, unknown> | undefined {
+  const params = (request as { params?: { _meta?: unknown } } | undefined)?.params;
+  const meta = params?._meta;
+  return typeof meta === 'object' && meta !== null && !Array.isArray(meta)
+    ? (meta as Record<string, unknown>)
+    : undefined;
+}
 
 /**
  * What the gates need to know about one call, beyond the call itself.
@@ -61,6 +72,12 @@ export interface CallContext {
   };
   /** Who the caller is, and which rung of the ADR-010 ladder said so. */
   readonly identity: IdentityResolution;
+  /**
+   * The trace context the request arrived with, from the HTTP `traceparent` header.
+   * A `_meta.traceparent` on the request itself is read by the gates and takes
+   * precedence, as it does on the session ladder (ADR-006).
+   */
+  readonly trace?: TraceContext | undefined;
   /**
    * Asks this caller's upstream for its whole tool list, for the manifest check
    * before a first call. Absent, the gates use `RuntimeDeps.fetchTools`.
@@ -379,8 +396,13 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
   }
 
   /** The call's context, or the connection's own when the host passed none. */
-  const contextOf = (given: CallContext | undefined): CallContext => {
-    if (given !== undefined) return given;
+  const contextOf = (given: CallContext | undefined, request: unknown): CallContext => {
+    const base = given ?? connectionContext();
+    // The request's own `_meta.traceparent`; a missing or malformed one leaves the context as it was.
+    const trace = parseTraceparent(metaOf(request)?.traceparent) ?? base.trace;
+    return trace === base.trace ? base : { ...base, trace };
+  };
+  const connectionContext = (): CallContext => {
     if (deps.sessionId === undefined || deps.resolveIdentity === undefined) {
       throw new Error('a gate was called without a call context and has no connection of its own');
     }
@@ -423,6 +445,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       callerIdentity: call.identity,
       sessionSource: call.session.source,
       sessionExact: call.session.exact,
+      ...(call.trace !== undefined ? { trace: call.trace } : {}),
       ...(judged !== undefined
         ? { judge: { model: judged.model, outcome: judged.outcome, effect: judged.effect } }
         : {}),
@@ -677,7 +700,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
   };
 
   const reportManifest = (event: ManifestEvent, given: CallContext | undefined): void => {
-    const call = contextOf(given);
+    const call = contextOf(given, undefined);
     switch (event.kind) {
       case 'pinned':
         notify(call, 'manifest_pinned', {
@@ -788,7 +811,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
 
   return {
     onCall: async (request, forward, given) => {
-      const call = contextOf(given);
+      const call = contextOf(given, request);
       const toolName = String(request.params?.name ?? 'unknown');
       // The caller's identity, not the session id: a ULID is minted per
       // connection and no role mapping can ever name it (ADR-010).
@@ -902,7 +925,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       return guarded.result as never;
     },
     onList: async (request, forward, given) => {
-      const call = contextOf(given);
+      const call = contextOf(given, request);
       if (serverRefuses(call, 'tools/list', undefined, 'tool_list')) {
         throw new ServerAccessError('tools/list');
       }
@@ -910,7 +933,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
     },
     onRequest: async (request, forward, given) => {
       if (!CONNECTION_LEVEL_METHODS.has(request.method)) {
-        const call = contextOf(given);
+        const call = contextOf(given, request);
         if (serverRefuses(call, request.method, request.method, 'access_denied')) {
           throw new ServerAccessError(request.method);
         }
@@ -918,7 +941,7 @@ export function buildGates(deps: RuntimeDeps): GuardGates {
       return forward();
     },
     onRead: async (request, forward, given) => {
-      const call = contextOf(given);
+      const call = contextOf(given, request);
       const uri = String(request.params?.uri ?? 'unknown');
       if (serverRefuses(call, 'resources/read', uri, 'resource_read')) {
         throw new ServerAccessError('resources/read');

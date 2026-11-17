@@ -21,7 +21,12 @@ import { assertPolicyRunnable, readKey } from '../preflight.js';
 import { loadShippedRuleset } from '../ruleset.js';
 import { buildGates, resolveIdentity } from '../runtime.js';
 import { checkServerName, reportUnmatchedServer } from '../server-name.js';
-import { NULL_TELEMETRY, OtlpTelemetrySink } from '../telemetry/sink.js';
+import {
+  checkpointFailureReporter,
+  checkpointSinkFor,
+  NULL_TELEMETRY,
+  OtlpTelemetrySink,
+} from '../telemetry/sink.js';
 import { ulid } from '../ulid.js';
 import { parseWrapArgs } from './wrap-args.js';
 
@@ -78,18 +83,6 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
   const sessionId = ulid();
   const compiled = compilePolicy(loaded.policy);
 
-  const audit = loaded.policy.audit.enabled
-    ? new AuditWriter({
-        path: resolveAgainst(loaded.dir, loaded.policy.audit.path),
-        auditKey:
-          loaded.policy.audit.key_env !== undefined
-            ? context.env[loaded.policy.audit.key_env]
-            : undefined,
-        checkpointEvery: loaded.policy.audit.checkpoint_every,
-        checkpoint: loaded.policy.audit.checkpoint_to === 'stderr' ? context.stderr : undefined,
-      })
-    : undefined;
-
   const telemetry =
     loaded.policy.telemetry.enabled && loaded.policy.telemetry.endpoint !== undefined
       ? new OtlpTelemetrySink({
@@ -104,6 +97,32 @@ export async function runWrap(context: CliContext, argv: readonly string[]): Pro
             ),
         })
       : NULL_TELEMETRY;
+  const audit = loaded.policy.audit.enabled
+    ? new AuditWriter({
+        path: resolveAgainst(loaded.dir, loaded.policy.audit.path),
+        auditKey:
+          loaded.policy.audit.key_env !== undefined
+            ? context.env[loaded.policy.audit.key_env]
+            : undefined,
+        checkpointEvery: loaded.policy.audit.checkpoint_every,
+        // A checkpoint that goes missing is reported on stderr and as a security event.
+        checkpoint: checkpointSinkFor(
+          loaded.policy.audit,
+          context.stderr,
+          checkpointFailureReporter({
+            out: (event, detail) =>
+              context.stderr.write(
+                `[mcpguard] ${escapeUnsafeJson(JSON.stringify({ event, session: sessionId, ...detail }))}\n`,
+              ),
+            telemetry,
+            clock: Date.now,
+            sessionId,
+            serverName,
+          }),
+        ),
+      })
+    : undefined;
+
   if (unmatched !== undefined) {
     reportUnmatchedServer(
       unmatched,

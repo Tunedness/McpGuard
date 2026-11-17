@@ -1,6 +1,6 @@
 import { CLIENT_INFO_META_KEY, TRACEPARENT_META_KEY } from '@modelcontextprotocol/server';
 import { describe, expect, it } from 'vitest';
-import { BAGGAGE_META_KEY, SESSION_BAGGAGE_KEY } from './remap.js';
+import { BAGGAGE_META_KEY, parseTraceparent, SESSION_BAGGAGE_KEY } from './remap.js';
 import {
   clientAddressKey,
   isSupportedSessionKey,
@@ -48,8 +48,21 @@ describe('traceIdOf', () => {
     `00-${TRACE_ID.toUpperCase()}-00f067aa0ba902b7-01`,
     `00-${TRACE_ID.slice(1)}-00f067aa0ba902b7-01`,
     `00-${TRACE_ID}`,
+    // The rest of what a W3C traceparent may not be: a session must not be named by
+    // a trace id that the telemetry would refuse to carry.
+    `00-${TRACE_ID}-${'0'.repeat(16)}-01`,
+    `ff-${TRACE_ID}-00f067aa0ba902b7-01`,
+    `00-${TRACE_ID}-00f067aa0ba902b7-zz`,
+    `00-${TRACE_ID}-00f067aa0ba902b7-01-extra`,
+    `00-${TRACE_ID}-00f067aa0ba902b7-01-${'a'.repeat(600)}`,
   ])('refuses %s', (value) => {
     expect(traceIdOf(value)).toBeUndefined();
+  });
+
+  it('agrees with parseTraceparent on every value: one reader, one answer', () => {
+    for (const value of [TRACEPARENT, `01-${TRACE_ID}-00f067aa0ba902b7-01-more`, 'garbage', '']) {
+      expect(traceIdOf(value)).toBe(parseTraceparent(value)?.traceId);
+    }
   });
 });
 

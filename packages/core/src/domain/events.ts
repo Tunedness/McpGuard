@@ -107,6 +107,21 @@ export interface JudgeRecord extends JudgeItemRecord {
   readonly items?: readonly JudgeItemRecord[] | undefined;
 }
 
+/**
+ * The W3C trace context a call arrived with: the caller's trace and the span that
+ * made the call (`traceparent`'s trace-id and parent-id), lower-case hex.
+ *
+ * It rides on an event so a collector can put McpGuard's records in the same
+ * trace as the caller's. It is a correlation handle, never a credential: it
+ * changes nothing about what is decided.
+ */
+export interface TraceContext {
+  /** 32 lower-case hex digits, not all zero. */
+  readonly traceId: string;
+  /** 16 lower-case hex digits, not all zero. */
+  readonly spanId: string;
+}
+
 /** One emitted event. Attribute encoding is the sink's business, not the engine's. */
 export interface SecurityEvent {
   readonly type: EventType;
@@ -127,6 +142,8 @@ export interface SecurityEvent {
   /** Which rung resolved `sessionId`, and whether that answer is exact (ADR-006). */
   readonly sessionSource?: SessionSource | undefined;
   readonly sessionExact?: boolean | undefined;
+  /** The caller's trace context, when the call carried a valid `traceparent`. */
+  readonly trace?: TraceContext | undefined;
   /** The judge's part in this event, when the judge was asked (ADR-012). */
   readonly judge?: Pick<JudgeRecord, 'model' | 'outcome' | 'effect'> | undefined;
 }

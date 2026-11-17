@@ -945,3 +945,65 @@ describe('CombinationHistory bounds', () => {
     expect(history.recent('s', 1)).toHaveLength(0);
   });
 });
+
+/**
+ * W3C trace context (Faz 23): a call's `_meta.traceparent` reaches the events the
+ * call causes, so a collector can put McpGuard's records in the caller's trace.
+ */
+describe('trace context', () => {
+  const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
+  const SPAN = '00f067aa0ba902b7';
+  const policy = {
+    mode: 'enforce',
+    roles: { alice: ['readonly'] },
+    tools: [{ match: 'echo__*', action: 'deny', roles: ['readonly'] }],
+  };
+  const alice = resolveIdentity({ flag: 'alice' });
+  const withMeta = (meta: unknown) =>
+    ({ method: 'tools/call', params: { name: 'echo', arguments: {}, _meta: meta } }) as never;
+
+  it('carries a valid _meta.traceparent onto the event the call causes', async () => {
+    const { gates, events } = rig({ policy, identity: alice });
+    await gates.onCall(withMeta({ traceparent: `00-${TRACE}-${SPAN}-01` }), textResult('x'));
+
+    expect(events[0]?.trace).toEqual({ traceId: TRACE, spanId: SPAN });
+  });
+
+  it('ignores a malformed one, still emits the event, and does not throw', async () => {
+    const { gates, events } = rig({ policy, identity: alice });
+    for (const bad of ['nonsense', `00-${'0'.repeat(32)}-${SPAN}-01`, 42, null, {}]) {
+      await gates.onCall(withMeta({ traceparent: bad }), textResult('x'));
+    }
+
+    expect(events).toHaveLength(5);
+    expect(events.every((e) => e.trace === undefined)).toBe(true);
+  });
+
+  it('has no trace when the request carries none', async () => {
+    const { gates, events } = rig({ policy, identity: alice });
+    await gates.onCall(callRequest, textResult('x'));
+
+    expect(events[0]).toBeDefined();
+    expect(events[0]?.trace).toBeUndefined();
+  });
+
+  it('prefers the request _meta over the context it was given, and falls back to it', async () => {
+    const header = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) };
+    const context = {
+      session: { id: 'S', source: 'mcp-session-id' as const, exact: true },
+      identity: alice,
+      trace: header,
+    };
+    const { gates, events } = rig({ policy, identity: alice });
+
+    await gates.onCall(callRequest, textResult('x'), context);
+    await gates.onCall(
+      withMeta({ traceparent: `00-${TRACE}-${SPAN}-01` }),
+      textResult('x'),
+      context,
+    );
+    await gates.onCall(withMeta({ traceparent: 'garbage' }), textResult('x'), context);
+
+    expect(events.map((e) => e.trace)).toEqual([header, { traceId: TRACE, spanId: SPAN }, header]);
+  });
+});

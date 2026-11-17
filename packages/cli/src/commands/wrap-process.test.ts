@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { createSocket } from 'node:dgram';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -360,4 +362,190 @@ describe('combination rules over a real pipe', () => {
     expect(await sendHttp()).toBe('sent to https://example.test');
     expect(run.stderr()).not.toContain('combination_detected');
   }, 30_000);
+});
+
+/**
+ * The syslog checkpoint over a real pipe: a wrapped session whose policy sends
+ * the chain-head checkpoint to a UDP or TCP listener, and sessions whose target
+ * does not answer, which must serve every call as usual and say, on stderr, that
+ * the checkpoint did not arrive.
+ */
+describe('syslog checkpoint over a real pipe', () => {
+  const RFC5424 = /^<86>1 \d{4}-\d{2}-\d{2}T[\d:.]+Z \S+ mcpguard - audit_checkpoint - (.*)$/s;
+  let workDir: string;
+  let session: Client | undefined;
+  let stderrChunks: string[] = [];
+
+  beforeAll(() => {
+    workDir = mkdtempSync(join(tmpdir(), 'mcpguard-syslog-'));
+  });
+  afterAll(() => {
+    rmSync(workDir, { recursive: true, force: true });
+  });
+  afterEach(async () => {
+    await session?.close().catch(() => {});
+    session = undefined;
+  });
+
+  async function wrapWith(name: string, target: string): Promise<Client> {
+    const cwd = join(workDir, name);
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(
+      join(cwd, 'guardpolicy.yaml'),
+      `version: 1\naudit:\n  checkpoint_every: 2\n  checkpoint_to: syslog\n  syslog:\n    target: ${target}\n`,
+    );
+    const transport = new StdioClientTransport({
+      command: 'node',
+      args: [MAIN, 'wrap', '--name', 'echo', '--', 'node', SERVER],
+      cwd,
+      stderr: 'pipe',
+    });
+    stderrChunks = [];
+    transport.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk.toString('utf8')));
+    session = new Client({ name: 'syslog-test', version: '0.0.0' });
+    await session.connect(transport);
+    return session;
+  }
+
+  const auditHashes = (name: string): string[] =>
+    readFileSync(join(workDir, name, '.mcpguard', 'audit.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => (JSON.parse(l) as { hash: string }).hash);
+
+  async function within<T>(promise: Promise<T>, what: string): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`${what} did not arrive within 10s`)), 10_000),
+      ),
+    ]);
+  }
+
+  async function twoCalls(client: Client): Promise<void> {
+    for (let i = 0; i < 2; i++) {
+      await client.callTool({ name: 'echo', arguments: { text: `call ${i}` } });
+    }
+  }
+
+  async function waitForStderr(pattern: string): Promise<string> {
+    const start = Date.now();
+    while (!stderrChunks.join('').includes(pattern)) {
+      if (Date.now() - start > 10_000) {
+        throw new Error(`stderr never said ${pattern}: ${stderrChunks.join('')}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return stderrChunks.join('');
+  }
+
+  it('sends an RFC 5424 checkpoint to a UDP listener after checkpoint_every records', async () => {
+    const listener = createSocket('udp4');
+    const received = new Promise<string>((resolve) =>
+      listener.once('message', (buffer) => resolve(buffer.toString('utf8'))),
+    );
+    await new Promise<void>((resolve) => listener.bind(0, '127.0.0.1', resolve));
+    try {
+      const client = await wrapWith('udp', `udp://127.0.0.1:${listener.address().port}`);
+      await twoCalls(client);
+
+      const match = RFC5424.exec(await within(received, 'the checkpoint datagram'));
+      expect(match).not.toBeNull();
+      const body = JSON.parse(match?.[1] ?? '') as { event: string; head: string };
+      expect(body.event).toBe('audit_checkpoint');
+      // The published head is the chain head in the file at that sequence number.
+      expect(auditHashes('udp')).toContain(body.head);
+    } finally {
+      listener.close();
+    }
+  }, 30_000);
+
+  it('sends it to a TCP listener as one line', async () => {
+    const lines: string[] = [];
+    const connections: Socket[] = [];
+    const server = createServer((connection) => {
+      connections.push(connection);
+      let buffered = '';
+      connection.on('data', (chunk) => {
+        buffered += chunk.toString('utf8');
+        for (let end = buffered.indexOf('\n'); end >= 0; end = buffered.indexOf('\n')) {
+          lines.push(buffered.slice(0, end));
+          buffered = buffered.slice(end + 1);
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      const client = await wrapWith('tcp', `tcp://127.0.0.1:${port}`);
+      await twoCalls(client);
+
+      const start = Date.now();
+      while (lines.length === 0) {
+        if (Date.now() - start > 10_000) throw new Error('no checkpoint line within 10s');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const match = RFC5424.exec(lines[0] ?? '');
+      expect(match).not.toBeNull();
+      expect(auditHashes('tcp')).toContain((JSON.parse(match?.[1] ?? '') as { head: string }).head);
+    } finally {
+      // The wrapped process holds its connection open: close it, or `close` waits for it.
+      for (const connection of connections) connection.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }, 30_000);
+
+  it.each([
+    [
+      'udp',
+      async () => {
+        const probe = createSocket('udp4');
+        await new Promise<void>((resolve) => probe.bind(0, '127.0.0.1', resolve));
+        const { port } = probe.address();
+        await new Promise<void>((resolve) => probe.close(resolve));
+        return `udp://127.0.0.1:${port}`;
+      },
+    ],
+    [
+      'tcp',
+      async () => {
+        const probe = createServer();
+        await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+        const address = probe.address();
+        const port = typeof address === 'object' && address !== null ? address.port : 0;
+        await new Promise((resolve) => probe.close(resolve));
+        return `tcp://127.0.0.1:${port}`;
+      },
+    ],
+    ['unix', async () => 'unix:///nonexistent-dir/mcpguard.sock'],
+    // A host that does not resolve: this took the whole `wrap` process down with an
+    // uncaught ERR_SOCKET_BAD_PORT on the first checkpoint.
+    ['udp-nxdomain', async () => 'udp://nonexistent-host.invalid:514'],
+    ['tcp-nxdomain', async () => 'tcp://nonexistent-host.invalid:514'],
+  ])(
+    '%s: serves every call as usual when the target does not answer, and says so on stderr',
+    async (name, target) => {
+      const client = await wrapWith(`dead-${name}`, await target());
+      for (let i = 0; i < 4; i++) {
+        const result = await client.callTool({ name: 'echo', arguments: { text: `call ${i}` } });
+        expect((result.content as { text: string }[])[0]?.text).toBe(`call ${i}`);
+      }
+
+      const stderr = await waitForStderr('"event":"checkpoint_error"');
+      expect(stderr).toContain(`"sink":"syslog"`);
+      expect(stderr).toContain(`${name.split('-')[0]}://`);
+      expect(stderr).not.toContain('ERR_SOCKET_BAD_PORT');
+      const log = readFileSync(join(workDir, `dead-${name}`, '.mcpguard', 'audit.jsonl'), 'utf8');
+      expect(
+        verifyChain(
+          log
+            .trim()
+            .split('\n')
+            .map((l) => JSON.parse(l)),
+        ).ok,
+      ).toBe(true);
+    },
+    30_000,
+  );
 });
